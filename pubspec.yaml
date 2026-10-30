@@ -1,0 +1,55 @@
+name: toil_troublez
+description: "A digital adaptation of the push-your-luck card game Toil & Troublez."
+publish_to: 'none'
+version: 1.0.3+4
+
+environment:
+  sdk: ^3.13.7
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  web_socket_channel: ^3.0.3
+  shared_preferences: ^2.5.6
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  test: ^1.31.1
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/textures/
+  fonts:
+    - family: Rye
+      fonts:
+        - asset: assets/fonts/Rye-Regular.ttf
+    - family: Cinzel Decorative
+      fonts:
+        - asset: assets/fonts/CinzelDecorative-Bold.ttf
+          weight: 700
+        - asset: assets/fonts/CinzelDecorative-Black.ttf
+          weight: 900
+    - family: Fraunces
+      fonts:
+        - asset: assets/fonts/Fraunces-400.ttf
+          weight: 400
+        - asset: assets/fonts/Fraunces-600.ttf
+          weight: 600
+        - asset: assets/fonts/Fraunces-700.ttf
+          weight: 700
+        - asset: assets/fonts/Fraunces-900.ttf
+          weight: 900
+    - family: Nunito Sans
+      fonts:
+        - asset: assets/fonts/NunitoSans-400.ttf
+          weight: 400
+        - asset: assets/fonts/NunitoSans-600.ttf
+          weight: 600
+        - asset: assets/fonts/NunitoSans-700.ttf
+          weight: 700
+        - asset: assets/fonts/NunitoSans-800.ttf
+          weight: 800
