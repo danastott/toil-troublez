@@ -66,5 +66,7 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Toil &amp; Troublez hosts and joins tables with nearby devices on your Wi-Fi network.</string>
 </dict>
 </plist>

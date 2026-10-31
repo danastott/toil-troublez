@@ -92,6 +92,7 @@ class _CardFace extends StatelessWidget {
   Widget build(BuildContext context) {
     final w = width;
     final isTalisman = card.isTalisman;
+    final isCloak = card.isCloak;
     final tint = TNTTheme.cardTint[card.color]!;
     final light = TNTTheme.cardTintLight[card.color]!;
     final deep = TNTTheme.cardTintDeep[card.color]!;
@@ -102,34 +103,48 @@ class _CardFace extends StatelessWidget {
     return Stack(
       fit: StackFit.expand,
       children: [
-        // Full-bleed colour wash, bright at the top-left.
+        // Full-bleed colour wash, bright at the top-left. The Cloak is
+        // the exception: a near-black face, not a colour-tinted one.
         DecoratedBox(
           decoration: BoxDecoration(
             gradient: LinearGradient(
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
-              colors: [light, tint, deep],
+              colors: isCloak
+                  ? const [
+                      Color(0xFF3B3B43),
+                      Color(0xFF24242B),
+                      Color(0xFF121216),
+                    ]
+                  : [light, tint, deep],
               stops: const [0.0, 0.48, 1.0],
             ),
           ),
         ),
         // A whisper of parchment grain, so the colour feels printed.
         Opacity(
-          opacity: 0.11,
+          opacity: isCloak ? 0.07 : 0.11,
           child: Image.asset(TNTTheme.textureParchment, fit: BoxFit.cover),
         ),
-        // The halo that makes the subject glow off the card.
+        // The halo that makes the subject glow off the card. The Cloak
+        // gets a faint iridescent wash instead of a colour glow.
         Positioned.fill(
           child: DecoratedBox(
             decoration: BoxDecoration(
               gradient: RadialGradient(
                 center: Alignment(0, isTalisman ? 0.02 : -0.12),
                 radius: 0.86,
-                colors: [
-                  glow.withValues(alpha: 0.62),
-                  glow.withValues(alpha: 0.18),
-                  glow.withValues(alpha: 0.0),
-                ],
+                colors: isCloak
+                    ? [
+                        const Color(0xFFB8A8E8).withValues(alpha: 0.30),
+                        const Color(0xFF9FE8F0).withValues(alpha: 0.12),
+                        const Color(0xFF9FE8F0).withValues(alpha: 0.0),
+                      ]
+                    : [
+                        glow.withValues(alpha: 0.62),
+                        glow.withValues(alpha: 0.18),
+                        glow.withValues(alpha: 0.0),
+                      ],
                 stops: const [0.0, 0.46, 0.78],
               ),
             ),
@@ -147,7 +162,7 @@ class _CardFace extends StatelessWidget {
           child: CustomPaint(
             painter: _FaceAtmospherePainter(
               seed: card.id,
-              sparkle: accent,
+              sparkle: isCloak ? const Color(0xFFD9EFFF) : accent,
               nameBand: !isTalisman,
             ),
           ),
@@ -251,13 +266,18 @@ class _NameBand extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          ColorGlyph(
-            color: card.color,
-            size: w * 0.125,
-            tint: Colors.white,
-            outline: Colors.black.withValues(alpha: 0.22),
-          ),
-          SizedBox(width: w * 0.025),
+          // The Cloak carries no colour glyph: its card color is
+          // decorative only (cloaks never enter a row), and the face
+          // is the plain dark card.
+          if (!card.isCloak) ...[
+            ColorGlyph(
+              color: card.color,
+              size: w * 0.125,
+              tint: Colors.white,
+              outline: Colors.black.withValues(alpha: 0.22),
+            ),
+            SizedBox(width: w * 0.025),
+          ],
           Flexible(
             child: Text(
               card.magician!.label.toUpperCase(),

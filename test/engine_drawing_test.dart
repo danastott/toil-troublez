@@ -153,4 +153,70 @@ void main() {
     }
     expect(e.winners, isNotEmpty);
   });
+
+  List<Player> four() => [
+        Player(id: 0, name: 'You'),
+        Player(id: 1, name: 'Bot 1', isBot: true, skill: BotSkill.skilled),
+        Player(id: 2, name: 'Bot 2', isBot: true, skill: BotSkill.skilled),
+        Player(id: 3, name: 'Bot 3', isBot: true, skill: BotSkill.skilled),
+      ];
+
+  /// A 4-player game whose draw pile is empty and whose discard pile holds
+  /// 12 copies of each of three different numbers (ids 24-59: Mushrooms,
+  /// Ravens, Flowers). The next draw triggers the reshuffle.
+  GameEngine reshuffled() {
+    final e = GameEngine(players: four(), seed: 3);
+    e.drawPile.clear();
+    for (var id = 24; id < 60; id++) {
+      e.discardPile.add(e.cardById(id)!);
+    }
+    e.draw();
+    return e;
+  }
+
+  test('reshuffle mixes the discard pile instead of sorting by number', () {
+    final e = reshuffled();
+    expect(e.depletions, 1);
+    // Reconstruct the full reshuffled draw order: the remaining pile
+    // (bottom to top), then the card just drawn.
+    final drawn = e.events
+        .firstWhere((ev) => ev.type == EventType.draw)
+        .card!;
+    final nums = [...e.drawPile.reversed, drawn]
+        .map((c) => c.number!)
+        .toList();
+    final counts = <int, int>{};
+    for (final n in nums) {
+      counts[n] = (counts[n] ?? 0) + 1;
+    }
+    expect(counts, {3: 12, 4: 12, 5: 12},
+        reason: 'the reshuffled pile must be a permutation of the discards');
+    // The old code sorted the pile by card id, so draws came out in
+    // number order (all 3s, then all 4s, then all 5s) and the top of the
+    // pile was predictable. A real shuffle must not.
+    var run = 1;
+    var maxRun = 1;
+    for (var i = 1; i < nums.length; i++) {
+      run = nums[i] == nums[i - 1] ? run + 1 : 1;
+      if (run > maxRun) maxRun = run;
+    }
+    expect(maxRun, lessThan(8));
+    var monotone = true;
+    for (var i = 1; i < nums.length; i++) {
+      if (nums[i] < nums[i - 1]) {
+        monotone = false;
+        break;
+      }
+    }
+    expect(monotone, isFalse,
+        reason: 'the draw order must not be sorted by number');
+  });
+
+  test('reshuffle is deterministic for the same seed', () {
+    final a = reshuffled();
+    final b = reshuffled();
+    final orderA = [...a.drawPile.reversed];
+    final orderB = [...b.drawPile.reversed];
+    expect(orderA.map((c) => c.id), orderB.map((c) => c.id));
+  });
 }

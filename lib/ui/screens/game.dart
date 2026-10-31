@@ -2,6 +2,9 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+import 'package:share_plus/share_plus.dart';
 
 import '../../game/cards.dart';
 import '../../game/commands.dart';
@@ -696,25 +699,26 @@ class _GameScreenState extends State<GameScreen> {
                 ),
               ),
             ),
-          // The trove is a bottom-aligned card stack, like a fan of deck
-          // cards: the latest card on top, the rest peeking beneath.
+          // The trove fanned in front of the player, like a laid-out hand:
+          // ascending numbers left to right, duplicates stacked vertically
+          // with the latest card on top.
           Align(
             alignment: Alignment.bottomCenter,
-            child: _troveStack(cards, player),
+            child: _troveFan(cards, player),
           ),
         ],
       ),
     );
   }
 
-  /// A deck-style vertical stack: each card offsets a little lower, the
-  /// top (last) card fully visible. Spreading compresses once the stack
-  /// grows past eight cards.
-  Widget _troveStack(List<GameCard> cards, int player) {
+  /// A horizontal fan of the trove: cards sorted by number, duplicates of
+  /// a number stacked vertically (each older card peeking up from behind
+  /// the latest), adjacent number columns slightly overlapping. The
+  /// spreading compresses when the fan outgrows the box, and the column
+  /// peek compresses once a stack grows past three cards.
+  Widget _troveFan(List<GameCard> cards, int player) {
     const w = 37.0;
-    final h = w / 0.72;
-    final steps = cards.length - 1;
-    final step = steps <= 0 ? 0.0 : h * 0.42 * (steps > 7 ? 7.0 / steps : 1.0);
+    const h = w / 0.72;
     if (cards.isEmpty) {
       return const SizedBox(
         width: 37,
@@ -732,30 +736,85 @@ class _GameScreenState extends State<GameScreen> {
         ),
       );
     }
-    return SizedBox(
-      width: w,
-      height: h + steps * step,
-      child: Stack(
-        children: [
-          for (var i = 0; i < cards.length; i++)
-            Positioned(
-              top: (cards.length - 1 - i) * step,
-              left: 0,
-              child: Opacity(
-                opacity: _flyingCards.contains(cards[i].id) ? 0 : 1,
-                child: _CardTile(
-                  key: _keyForCard(cards[i].id),
-                  card: cards[i],
-                  width: w,
-                  glow: _troveTapTarget(cards[i], player),
-                  onTap: _troveTapTarget(cards[i], player)
-                      ? () => _troveTap(cards[i], player)
-                      : null,
+    // Sort a copy by number (stable: acquisition order within a number),
+    // then group, so the fan reads 1..5 left to right regardless of the
+    // list the engine handed over.
+    final sorted = [...cards]
+      ..sort((a, b) => (a.number ?? -1).compareTo(b.number ?? -1));
+    final groups = <List<GameCard>>[];
+    for (final c in sorted) {
+      if (groups.isEmpty || groups.last.first.number != c.number) {
+        groups.add([c]);
+      } else {
+        groups.last.add(c);
+      }
+    }
+    double peek(int n) {
+      final steps = n - 1;
+      return steps <= 0
+          ? 0.0
+          : h * 0.42 * (steps > 3 ? 3.0 / steps : 1.0);
+    }
+    double stackHeight(List<GameCard> g) => h + (g.length - 1) * peek(g.length);
+    return LayoutBuilder(
+      builder: (context, c) {
+        // Columns sit 30% of a card width apart, like a spread hand;
+        // compress when the fan is wider than the box, keeping half a
+        // card of each column visible.
+        const natural = w * 1.3;
+        var step = natural;
+        if (groups.length > 1) {
+          final fit = (c.maxWidth - w) / (groups.length - 1);
+          step = math.min(natural, math.max(w * 0.5, fit));
+        }
+        final totalW = w + (groups.length - 1) * step;
+        final height =
+            groups.map(stackHeight).reduce((a, b) => a > b ? a : b);
+        return SizedBox(
+          width: totalW,
+          height: height,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              for (var gi = 0; gi < groups.length; gi++)
+                Positioned(
+                  left: gi * step,
+                  top: height - stackHeight(groups[gi]),
+                  child: SizedBox(
+                    width: w,
+                    height: stackHeight(groups[gi]),
+                    child: Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        for (var i = 0; i < groups[gi].length; i++)
+                          Positioned(
+                            top: (groups[gi].length - 1 - i) *
+                                peek(groups[gi].length),
+                            left: 0,
+                            child: Opacity(
+                              opacity: _flyingCards.contains(
+                                      groups[gi][i].id)
+                                  ? 0
+                                  : 1,
+                              child: _CardTile(
+                                key: _keyForCard(groups[gi][i].id),
+                                card: groups[gi][i],
+                                width: w,
+                                glow: _troveTapTarget(groups[gi][i], player),
+                                onTap: _troveTapTarget(groups[gi][i], player)
+                                    ? () => _troveTap(groups[gi][i], player)
+                                    : null,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
                 ),
-              ),
-            ),
-        ],
-      ),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -773,13 +832,32 @@ class _GameScreenState extends State<GameScreen> {
     }
   }
 
+  /// The troves along the bottom of the table. The fans are wider than the
+  /// old card stacks, so four or more players sit in two rows of boxes
+  /// (the rows keep equal column widths so the boxes line up).
   Widget _troves() {
+    final ps = _e.players;
+    final cols = ps.length <= 3 ? ps.length : (ps.length + 1) ~/ 2;
+    final rows = <List<Player>>[
+      for (var i = 0; i < ps.length; i += cols)
+        ps.sublist(i, math.min(i + cols, ps.length)),
+    ];
     return ConstrainedBox(
       key: const ValueKey('tnt-troves'),
       constraints: const BoxConstraints(minHeight: 76),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [for (final p in _e.players) Expanded(child: _trove(p.id))],
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final row in rows)
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                for (final p in row) Expanded(child: _trove(p.id)),
+                for (var i = row.length; i < cols; i++)
+                  const Expanded(child: SizedBox.shrink()),
+              ],
+            ),
+        ],
       ),
     );
   }
@@ -1276,6 +1354,12 @@ class _GameScreenState extends State<GameScreen> {
         title: const Text('Toil & Troublez'),
         actions: [
           IconButton(
+            key: const ValueKey('tnt-log'),
+            icon: const Icon(Icons.menu_book, size: 20),
+            tooltip: 'Game log',
+            onPressed: _openLog,
+          ),
+          IconButton(
             icon: const Icon(Icons.close),
             onPressed: () {
               if (widget.ownsSession) {
@@ -1358,6 +1442,14 @@ class _GameScreenState extends State<GameScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  /// Opens the transaction log: every engine event so far, newest first.
+  void _openLog() {
+    showDialog<void>(
+      context: context,
+      builder: (context) => _LogDialog(session: widget.session),
     );
   }
 }
@@ -1687,4 +1779,256 @@ class _Flight {
   final GameCard card;
   final Offset from;
   final Offset to;
+}
+
+// ----------------------------------------------------------------------
+// Game log: the full transaction history in a scrollable dialog
+// ----------------------------------------------------------------------
+
+class _LogDialog extends StatefulWidget {
+  const _LogDialog({required this.session});
+
+  final GameSession session;
+
+  @override
+  State<_LogDialog> createState() => _LogDialogState();
+}
+
+class _LogDialogState extends State<_LogDialog> {
+  @override
+  void initState() {
+    super.initState();
+    widget.session.addListener(_onSession);
+  }
+
+  void _onSession() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    widget.session.removeListener(_onSession);
+    super.dispose();
+  }
+
+  /// Copies the full log (oldest first, with the seed header) to the
+  /// clipboard.
+  void _copyLog() {
+    Clipboard.setData(ClipboardData(text: _logText(widget.session)));
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(content: Text('Log copied')));
+  }
+
+  /// Offers the full log through the OS share sheet.
+  Future<void> _shareLog() async {
+    try {
+      await SharePlus.instance.share(
+        ShareParams(
+          text: _logText(widget.session),
+          title: 'Toil & Troublez game log',
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+              content:
+                  Text('Sharing is not available on this device; use Copy')),
+        );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final events = widget.session.engine.events;
+    final hideDrawn = widget.session.isPassAndPlay;
+    return Dialog(
+      backgroundColor: TNTTheme.parchment,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 28, vertical: 28),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 420, maxHeight: 560),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Game Log',
+                      style: TextStyle(
+                        fontFamily: TNTTheme.fontTitle,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.5,
+                        color: TNTTheme.ink,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.copy, size: 18),
+                    tooltip: 'Copy log',
+                    onPressed: _copyLog,
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.ios_share, size: 18),
+                    tooltip: 'Share log',
+                    onPressed: _shareLog,
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close, size: 18),
+                    tooltip: 'Close',
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                ],
+              ),
+              const Divider(height: 18),
+              Flexible(
+                child: events.isEmpty
+                    ? const Center(
+                        child: Text(
+                          'No moves yet.',
+                          style: TextStyle(
+                            fontFamily: TNTTheme.fontSerif,
+                            fontStyle: FontStyle.italic,
+                            fontSize: 13,
+                            color: TNTTheme.ink,
+                          ),
+                        ),
+                      )
+                    : ListView.builder(
+                        itemCount: events.length,
+                        itemBuilder: (context, i) {
+                          final ev = events[events.length - 1 - i];
+                          final dim = ev.type == EventType.turn;
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 3),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                SizedBox(
+                                  width: 30,
+                                  child: Text(
+                                    '${events.length - i}',
+                                    style: TextStyle(
+                                      fontFamily: TNTTheme.fontUi,
+                                      fontSize: 12,
+                                      color: TNTTheme.ink.withValues(alpha: 0.5),
+                                    ),
+                                  ),
+                                ),
+                                Expanded(
+                                  child: Text(
+                                    _logLine(
+                                      widget.session.engine,
+                                      ev,
+                                      hideDrawn: hideDrawn,
+                                    ),
+                                    style: TextStyle(
+                                      fontFamily: TNTTheme.fontUi,
+                                      fontSize: 13,
+                                      color: dim
+                                          ? TNTTheme.ink
+                                              .withValues(alpha: 0.55)
+                                          : TNTTheme.ink,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A human-readable line for one engine event, for the game log.
+String _logLine(GameEngine e, GameEvent ev, {required bool hideDrawn}) {
+  String name(int i) => e.players[i].name;
+  String cardName(GameCard c) =>
+      c.isTalisman ? c.talisman!.label : c.magician!.label;
+  String a(GameCard? c) => c == null ? 'a card' : 'a ${cardName(c)}';
+  switch (ev.type) {
+    case EventType.draw:
+      return ev.card == null || hideDrawn
+          ? '${name(ev.player!)} draws a card'
+          : '${name(ev.player!)} draws ${a(ev.card)}';
+    case EventType.place:
+      return ev.row == null
+          ? '${name(ev.player!)} opens a new row with ${a(ev.card)}'
+          : '${name(ev.player!)} plays ${a(ev.card)} in row ${ev.row! + 1}';
+    case EventType.bust:
+      return '${name(ev.player!)} busts with ${a(ev.card)}';
+    case EventType.cloak:
+      return ev.detail == 'discarded'
+          ? '${name(ev.player!)}\'s ${a(ev.card)} is unplayable and discarded'
+          : '${name(ev.player!)} covers a Talisman with a Cloak';
+    case EventType.pass:
+      return '${name(ev.player!)} passes';
+    case EventType.rowCollect:
+      return ev.row == null
+          ? '${name(ev.player!)} collects a row'
+          : '${name(ev.player!)} collects row ${ev.row! + 1}';
+    case EventType.pickup:
+      return '${name(ev.player!)} picks up ${a(ev.card)}';
+    case EventType.vanish:
+      if (ev.card == null) {
+        final wanted = ev.detail == null || !ev.detail!.startsWith('chose ')
+            ? 'a Talisman'
+            : ev.detail!.substring('chose '.length);
+        return '${name(ev.player!)}\'s Vanish takes $wanted';
+      }
+      return ev.other == null
+          ? '${name(ev.player!)} plays a Vanish'
+          : '${name(ev.player!)} discards ${a(ev.card)} (Vanish by ${name(ev.other!)})';
+    case EventType.summon:
+      return ev.other == null
+          ? '${name(ev.player!)} plays a Summon'
+          : '${name(ev.player!)} takes ${a(ev.card)} from ${name(ev.other!)}';
+    case EventType.poison:
+      return ev.detail == 'discards'
+          ? '${name(ev.player!)} discards ${a(ev.card)} (Poison)'
+          : '${name(ev.player!)} plays a Poison';
+    case EventType.collection:
+      return '${name(ev.player!)} completes a collection (${ev.detail ?? ''})';
+    case EventType.reshuffle:
+      return 'The draw pile is reshuffled';
+    case EventType.deckEmpty:
+      return 'The draw pile is exhausted';
+    case EventType.turn:
+      return '${name(ev.player!)}\'s turn';
+    case EventType.gameOver:
+      final winners = [for (final w in e.winners) name(w)];
+      return winners.isEmpty
+          ? 'The game ends'
+          : '${winners.join(' and ')} wins the game';
+  }
+}
+
+/// The full game log as plain text, oldest first: a header with the
+/// players and the deck seed (so the exact game can be reproduced), then
+/// every event as a numbered line.
+String _logText(GameSession session) {
+  final e = session.engine;
+  final b = StringBuffer()
+    ..writeln('Toil & Troublez game log')
+    ..writeln('Seed ${e.seed}')
+    ..writeln('Players: ${e.players.map((p) => p.name).join(', ')}')
+    ..writeln();
+  for (var i = 0; i < e.events.length; i++) {
+    final ev = e.events[i];
+    b.writeln(
+        '${i + 1}  ${_logLine(e, ev, hideDrawn: session.isPassAndPlay)}');
+  }
+  return b.toString().trimRight();
 }

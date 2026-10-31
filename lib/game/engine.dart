@@ -192,8 +192,8 @@ class GameEngine {
   void _doDraw() {
     if (drawPile.isEmpty) {
       if (discardPile.isNotEmpty && depletions < maxReshuffles) {
-        drawPile..addAll(discardPile)..sort((a, b) => b.id - a.id);
-        discardPile.clear();
+        drawPile.addAll(discardPile);
+        Deck.reshuffle(drawPile, seed, depletions);
         depletions++;
         _emit(GameEvent(EventType.reshuffle, player: current));
       } else {

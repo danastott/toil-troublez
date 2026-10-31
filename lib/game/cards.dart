@@ -121,6 +121,14 @@ class Deck {
     return deck;
   }
 
+  /// Deterministically reshuffles [deck] in place (Fisher–Yates with the
+  /// shared LCG). The PRNG state is derived from the game [seed] and a
+  /// [salt] (the depletion count), so every device rebuilds the identical
+  /// order and each reshuffle differs from the initial shuffle and from
+  /// the other reshuffles.
+  static void reshuffle(List<GameCard> deck, int seed, int salt) =>
+      _shuffle(deck, seed * 1000003 + salt * 7919);
+
   /// A small deterministic PRNG so all devices shuffle identically.
   static void _shuffle(List<GameCard> deck, int seed) {
     var state = seed == 0 ? 0x12345678 : seed;

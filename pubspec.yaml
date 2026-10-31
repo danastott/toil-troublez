@@ -1,7 +1,7 @@
 name: toil_troublez
 description: "A digital adaptation of the push-your-luck card game Toil & Troublez."
 publish_to: 'none'
-version: 1.0.4+5
+version: 1.0.67+68
 
 environment:
   sdk: ^3.13.7
@@ -13,6 +13,7 @@ dependencies:
   web_socket_channel: ^3.0.3
   shared_preferences: ^2.5.6
   path_provider: ^2.1.4
+  share_plus: ^13.3.1
 
 dev_dependencies:
   flutter_test:

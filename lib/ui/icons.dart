@@ -1745,134 +1745,127 @@ void _drawPoisonRich(Canvas c, Rect r, Color _) {
 void _drawCloakRich(Canvas c, Rect r, Color _) {
   final w = r.width;
   final cx = r.center.dx;
-  final top = r.top + w * 0.04;
-
-  // Swirling cloak ribbons.
-  const ribbonColors = [
-    Color(0xFF8FE3EA),
-    Color(0xFFC7A6F0),
-    Color(0xFFF3D27A),
-    Color(0xFFF2F7FF),
+  final t = r.top;
+  const skin = Color(0xFFE2AC84);
+  const hair = Color(0xFF17171D);
+  const ribbons = [
+    Color(0xFFF0A8C0), // pink
+    Color(0xFF8FD8F0), // sky
+    Color(0xFFC7A6F0), // lavender
+    Color(0xFFF3D27A), // gold
+    Color(0xFF9FE8C8), // mint
+    Color(0xFFF2F7FF), // near white
   ];
-  for (var i = 0; i < 4; i++) {
-    final path = Path()
-      ..moveTo(cx - w * 0.30 + i * w * 0.10, r.bottom - w * 0.04)
-      ..quadraticBezierTo(
-        cx - w * 0.55 + i * w * 0.16,
-        top + w * (0.52 - i * 0.04),
-        cx - w * 0.20 + i * w * 0.10,
-        top + w * (0.40 - i * 0.03),
-      )
-      ..quadraticBezierTo(
-        cx + w * 0.10 + i * w * 0.05,
-        top + w * (0.34 - i * 0.02),
-        cx + w * 0.34,
-        top + w * (0.52 + i * 0.05),
-      );
-    c.drawPath(
-      path,
-      _stroke(ribbonColors[i].withValues(alpha: 0.78), w * (0.060 - i * 0.008)),
-    );
-  }
 
-  // Cloak body.
+  // Two ribbons arcing behind the figure, over the shoulders.
+  c.drawPath(
+    Path()
+      ..moveTo(cx - w * 0.34, t + w * 0.42)
+      ..quadraticBezierTo(cx - w * 0.30, t + w * 0.02, cx + w * 0.10, t + w * 0.10),
+    _stroke(ribbons[1].withValues(alpha: 0.38), w * 0.045),
+  );
+  c.drawPath(
+    Path()
+      ..moveTo(cx - w * 0.14, t + w * 0.05)
+      ..quadraticBezierTo(cx + w * 0.26, t, cx + w * 0.35, t + w * 0.40),
+    _stroke(ribbons[0].withValues(alpha: 0.38), w * 0.045),
+  );
+
+  // Torso: a dark charcoal shirt, shoulders to the card edge.
   final body = Path()
-    ..moveTo(cx - w * 0.44, r.bottom - w * 0.02)
+    ..moveTo(cx - w * 0.31, r.bottom - w * 0.01)
     ..quadraticBezierTo(
-      cx - w * 0.40,
-      top + w * 0.56,
-      cx - w * 0.22,
-      top + w * 0.44,
+      cx - w * 0.33,
+      t + w * 0.44,
+      cx - w * 0.19,
+      t + w * 0.355,
     )
-    ..lineTo(cx + w * 0.22, top + w * 0.44)
+    ..quadraticBezierTo(cx, t + w * 0.315, cx + w * 0.19, t + w * 0.355)
     ..quadraticBezierTo(
-      cx + w * 0.40,
-      top + w * 0.56,
-      cx + w * 0.44,
-      r.bottom - w * 0.02,
+      cx + w * 0.33,
+      t + w * 0.44,
+      cx + w * 0.31,
+      r.bottom - w * 0.01,
     )
     ..close();
   c.drawPath(
     body,
-    _gradient(
-      body.getBounds(),
-      const Color(0xFF2E4A66),
-      const Color(0xFF14222F),
-    ),
+    _gradient(body.getBounds(), const Color(0xFF34343C), const Color(0xFF1C1C22)),
   );
 
-  // Hood.
-  final hood = Path()
-    ..moveTo(cx - w * 0.26, top + w * 0.46)
-    ..quadraticBezierTo(cx - w * 0.24, top + w * 0.16, cx, top + w * 0.12)
-    ..quadraticBezierTo(
-      cx + w * 0.24,
-      top + w * 0.16,
-      cx + w * 0.26,
-      top + w * 0.46,
-    )
-    ..quadraticBezierTo(cx, top + w * 0.52, cx - w * 0.26, top + w * 0.46)
-    ..close();
-  c.drawPath(
-    hood,
-    _gradient(
-      hood.getBounds(),
-      const Color(0xFF3C6288),
-      const Color(0xFF1B3047),
-    ),
-  );
-  c.drawPath(
-    hood,
-    _stroke(const Color(0xFF9CD6E8).withValues(alpha: 0.55), w * 0.014),
-  );
-
-  // Face in shadow.
-  c.drawOval(
-    Rect.fromCenter(
-      center: Offset(cx, top + w * 0.34),
-      width: w * 0.24,
-      height: w * 0.28,
-    ),
-    _fill(const Color(0xFF1A2836)),
+  // Neck, face, and short dark hair.
+  c.drawRect(
+    Rect.fromLTWH(cx - w * 0.032, t + w * 0.285, w * 0.064, w * 0.06),
+    _fill(skin),
   );
   c.drawOval(
     Rect.fromCenter(
-      center: Offset(cx - w * 0.03, top + w * 0.33),
-      width: w * 0.16,
-      height: w * 0.20,
+      center: Offset(cx, t + w * 0.19),
+      width: w * 0.20,
+      height: w * 0.23,
     ),
-    _fill(const Color(0xFFE8B58C).withValues(alpha: 0.75)),
+    _fill(skin.withValues(alpha: 0.92)),
   );
   for (final sx in [-1.0, 1.0]) {
     c.drawCircle(
-      Offset(cx - w * 0.03 + sx * w * 0.04, top + w * 0.32),
-      w * 0.012,
+      Offset(cx + sx * w * 0.028, t + w * 0.185),
+      w * 0.011,
       _fill(const Color(0xFF3A2A2A)),
     );
   }
-
-  // Clasp and magic motes.
   c.drawPath(
-    _starPath(
-      Rect.fromCenter(
-        center: Offset(cx, top + w * 0.50),
-        width: w * 0.13,
-        height: w * 0.13,
-      ),
-      inner: 0.38,
-    ),
-    _fill(_artGold),
+    Path()
+      ..moveTo(cx - w * 0.105, t + w * 0.215)
+      ..quadraticBezierTo(cx - w * 0.12, t + w * 0.055, cx, t + w * 0.045)
+      ..quadraticBezierTo(cx + w * 0.12, t + w * 0.055, cx + w * 0.105, t + w * 0.215)
+      ..quadraticBezierTo(cx, t + w * 0.13, cx - w * 0.105, t + w * 0.215)
+      ..close(),
+    _fill(hair),
   );
-  for (final (dx, dy, s) in [
-    (-0.34, 0.26, 0.05),
-    (0.36, 0.32, 0.04),
-    (0.30, 0.18, 0.03),
-    (-0.30, 0.60, 0.035),
+
+  // Swirling ribbons of pastel light wrapping the body.
+  void swirl(double x0, double y0, double m1x, double m1y, double x1, double y1,
+      double m2x, double m2y, double x2, double y2, Color col, double k, double a) {
+    c.drawPath(
+      Path()
+        ..moveTo(cx + x0 * w, t + y0 * w)
+        ..quadraticBezierTo(
+          cx + m1x * w,
+          t + m1y * w,
+          cx + x1 * w,
+          t + y1 * w,
+        )
+        ..quadraticBezierTo(cx + m2x * w, t + m2y * w, cx + x2 * w, t + y2 * w),
+      _stroke(col.withValues(alpha: a), k * w),
+    );
+  }
+  final bottom = r.bottom - t;
+  swirl(-0.36, bottom - 0.02, -0.46, 0.46, -0.18, 0.375, 0.16, 0.285, 0.40, 0.42,
+      ribbons[0], 0.055, 0.8);
+  swirl(-0.30, bottom - 0.02, -0.34, 0.40, 0.04, 0.34, 0.30, 0.30, 0.41, 0.38,
+      ribbons[1], 0.06, 0.8);
+  swirl(-0.24, bottom - 0.02, -0.04, 0.33, 0.16, 0.31, 0.32, 0.31, 0.36, 0.36,
+      ribbons[2], 0.05, 0.75);
+  swirl(-0.34, bottom - 0.05, 0.0, 0.58, 0.34, bottom - 0.05, 0.34, bottom - 0.05,
+      0.34, bottom - 0.05, ribbons[3], 0.045, 0.7);
+  swirl(0.37, bottom - 0.02, 0.46, 0.46, 0.18, 0.375, -0.16, 0.285, -0.40, 0.42,
+      ribbons[4], 0.055, 0.8);
+  swirl(-0.29, bottom - 0.04, 0.05, 0.42, 0.30, bottom - 0.06, 0.30, bottom - 0.06,
+      0.30, bottom - 0.06, ribbons[5], 0.032, 0.75);
+
+  // Magic motes.
+  for (final (dx, dy, s, col) in [
+    (-0.36, 0.30, 0.020, ribbons[5]),
+    (0.38, 0.24, 0.016, ribbons[4]),
+    (-0.30, 0.58, 0.014, ribbons[0]),
+    (0.34, 0.55, 0.020, ribbons[1]),
+    (-0.02, 0.10, 0.013, ribbons[5]),
+    (0.22, 0.14, 0.012, ribbons[2]),
   ]) {
     c.drawCircle(
-      Offset(cx + dx * w, top + dy * w),
+      Offset(cx + dx * w, t + dy * w),
       s * w,
-      _fill(const Color(0xFFD6F6FA)),
+      _fill(col.withValues(alpha: 0.7)),
     );
   }
 }

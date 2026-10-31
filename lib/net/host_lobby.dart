@@ -102,14 +102,20 @@ class HostLobby extends LobbyController {
       tryPort++;
     }
     if (server == null) {
-      final reason = bindError is SocketException &&
-              bindError.osError?.message != null
-          ? ' (${bindError.osError!.message})'
-          : '';
-      _error = 'Could not open the game port: ports $firstPort to '
-          '${firstPort + 8} are busy or blocked$reason. Another program '
-          '(often another run of this app) is probably holding them — '
-          'close it and try again.';
+      final msg =
+          bindError is SocketException ? bindError.osError?.message : null;
+      final denied = msg != null &&
+          (msg.toLowerCase().contains('permitted') ||
+              msg.toLowerCase().contains('permission'));
+      _error = denied
+          ? 'The device is not letting the app open the game port (ports '
+              '$firstPort to ${firstPort + 8}): $msg. Reinstall the app '
+              'from a fresh build and try again on a Wi-Fi network.'
+          : 'Could not open the game port: ports $firstPort to '
+              '${firstPort + 8} are busy or blocked'
+              '${msg == null ? '' : ' ($msg)'}. Another program (often '
+              'another run of this app) is probably holding them — '
+              'close it and try again.';
       notifyListeners();
       return;
     }

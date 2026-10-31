@@ -1,6 +1,8 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:toil_troublez/ui/icons.dart';
 import 'package:toil_troublez/game/bot.dart';
 import 'package:toil_troublez/game/cards.dart';
 import 'package:toil_troublez/game/engine.dart';
@@ -279,35 +281,176 @@ void main() {
     expect(session.engine.over || session.engine.acting != 0, isTrue);
   });
 
-  testWidgets('a trove that outgrows one line wraps onto extra rows',
+  testWidgets('a trove fans left to right by number, duplicates stacked',
       (tester) async {
     final session = solo(1);
-    // Stuff ten real cards into my trove — far more than one line of
-    // 37px tiles holds — and pull them out of the draw pile by id.
-    final stolen = Deck.build(7).take(10).toList();
-    final ids = stolen.map((c) => c.id).toSet();
-    session.engine.drawPile
-        .removeWhere((c) => ids.contains(c.id));
-    session.engine.players[0].trove.addAll(stolen);
+    // Stuff a known hand into my trove: two Toads (#1), a Crystal (#2),
+    // two Mushrooms (#3) and a Flower (#5), pulled out of the draw pile
+    // by id so the game cannot also draw them.
+    const ids = [0, 1, 12, 24, 25, 48];
+    session.engine.drawPile.removeWhere((c) => ids.contains(c.id));
+    for (final id in ids) {
+      session.engine.players[0].trove.add(session.engine.cardById(id)!);
+    }
     await pumpGame(tester, session);
 
     final troves = find.byKey(const ValueKey('tnt-troves'));
     expect(troves, findsOneWidget);
-    // The trove area grows past its minimum height...
-    expect(tester.getSize(troves).height, greaterThan(76));
-    // ...because the cards wrap: ten tiles do not fit one line, so the
-    // vertical spread of the cards exceeds a single card's height (a
-    // sideways scroll would keep them on one line).
-    final rects = find
+    final rects = <int, Rect>{};
+    for (final el in find
         .descendant(of: troves, matching: find.byType(CardView))
-        .evaluate()
-        .map((e) => tester.getRect(find.byWidget(e.widget)))
-        .toList();
-    expect(rects, hasLength(10));
-    final top =
-        rects.map((r) => r.top).reduce((a, b) => a < b ? a : b);
-    final bottom =
-        rects.map((r) => r.bottom).reduce((a, b) => a > b ? a : b);
-    expect(bottom - top, greaterThan(rects.first.height));
+        .evaluate()) {
+      rects[(el.widget as CardView).card.id] =
+          tester.getRect(find.byWidget(el.widget));
+    }
+    expect(rects, hasLength(6));
+    // The numbers spread left to right: 1, 2, 3, then 5, and the fan is
+    // wider than a single card.
+    expect(rects[0]!.left, lessThan(rects[12]!.left));
+    expect(rects[12]!.left, lessThan(rects[24]!.left));
+    expect(rects[24]!.left, lessThan(rects[48]!.left));
+    expect(rects[48]!.left - rects[0]!.left, greaterThan(rects[0]!.width));
+    // Duplicates stack in place: the same column, with the later-picked
+    // card fully visible on top and the older one peeking beneath it.
+    expect(rects[1]!.left, moreOrLessEquals(rects[0]!.left, epsilon: 1));
+    expect(rects[1]!.top, lessThan(rects[0]!.top));
+    expect(rects[25]!.left, moreOrLessEquals(rects[24]!.left, epsilon: 1));
+    expect(rects[25]!.top, lessThan(rects[24]!.top));
+  });
+
+  testWidgets('four players sit in two rows of trove boxes',
+      (tester) async {
+    final s = LocalGameSession(
+      players: [
+        Player(id: 0, name: 'You'),
+        for (var i = 1; i < 4; i++)
+          Player(id: i, name: 'Bot $i', isBot: true, skill: BotSkill.skilled),
+      ],
+      mySeat: 0,
+      seed: 5,
+      botDelayMs: 0,
+    );
+    s.start();
+    await pumpGame(tester, s);
+    Finder box(String name) => find.descendant(
+        of: find.byKey(const ValueKey('tnt-troves')),
+        matching: find.text(name));
+    // Players 0 and 1 share the top row; 2 and 3 sit below them in the
+    // second row, which keeps the same column widths.
+    final top = tester.getCenter(box('You'));
+    final beside = tester.getCenter(box('Bot 1'));
+    final below = tester.getCenter(box('Bot 2'));
+    expect(beside.dy, closeTo(top.dy, 2));
+    expect(beside.dx, greaterThan(top.dx));
+    expect(below.dy, greaterThan(top.dy + 20));
+    expect(below.dx, closeTo(top.dx, 2));
+  });
+
+  testWidgets('a Cloak card wears a dark face and a plain name band',
+      (tester) async {
+    final cloak = Deck.build(0).firstWhere((c) => c.isCloak);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Center(child: CardView(card: cloak, width: 120)),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('CLOAK'), findsOneWidget);
+    expect(find.byType(ColorGlyph), findsNothing);
+  });
+
+  testWidgets('the log icon opens a dialog of the game transactions',
+      (tester) async {
+    final s = solo(1);
+    await pumpGame(tester, s);
+    // Draw and place my first card, then end the turn. After the pass the
+    // engine waits on me to collect a row (none is complete yet), so the
+    // history holds exactly my three moves: draw, place, pass.
+    await tester.tap(find.byKey(const ValueKey('tnt-deck')));
+    await tester.pumpAndSettle();
+    await placeFirst(tester, s);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('End Turn'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('tnt-log')));
+    await tester.pump();
+    expect(find.text('Game Log'), findsOneWidget);
+
+    // Seed 1: my first draw is a Poison, placed in a fresh row, then I
+    // end the turn. Every transaction shows up in the log.
+    expect(find.text('You draws a Poison'), findsOneWidget);
+    expect(find.text('You opens a new row with a Poison'), findsOneWidget);
+    expect(find.text('You passes'), findsOneWidget);
+
+    // Newest first: the pass sits above the place, the place above the
+    // draw.
+    final passTop =
+        tester.getTopLeft(find.text('You passes')).dy;
+    final placeTop = tester
+        .getTopLeft(find.text('You opens a new row with a Poison'))
+        .dy;
+    final drawTop = tester.getTopLeft(find.text('You draws a Poison')).dy;
+    expect(passTop, lessThan(placeTop));
+    expect(placeTop, lessThan(drawTop));
+  });
+
+  testWidgets('the log dialog copies and shares the full log',
+      (tester) async {
+    final s = solo(1);
+    await pumpGame(tester, s);
+    await tester.tap(find.byKey(const ValueKey('tnt-deck')));
+    await tester.pumpAndSettle();
+    await placeFirst(tester, s);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('End Turn'));
+    await tester.pumpAndSettle();
+
+    // Capture clipboard writes and share-sheet calls.
+    String? copied;
+    String? shared;
+    tester.binding.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      if (call.method == 'Clipboard.setData') {
+        copied = (call.arguments as Map<Object?, Object?>)['text'] as String;
+      }
+      return null;
+    });
+    const shareChannel = MethodChannel('dev.fluttercommunity.plus/share');
+    tester.binding.defaultBinaryMessenger
+        .setMockMethodCallHandler(shareChannel, (call) async {
+      if (call.method == 'share') {
+        final args = call.arguments as Map<Object?, Object?>;
+        shared = '${args['title']}\n${args['text']}';
+      }
+      return null;
+    });
+    addTearDown(() {
+      tester.binding.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, null);
+      tester.binding.defaultBinaryMessenger
+          .setMockMethodCallHandler(shareChannel, null);
+    });
+
+    await tester.tap(find.byKey(const ValueKey('tnt-log')));
+    await tester.pump();
+
+    await tester.tap(find.byTooltip('Copy log'));
+    await tester.pump();
+    expect(copied, isNotNull);
+    expect(copied, startsWith('Toil & Troublez game log'));
+    expect(copied, contains('Seed 1'));
+    expect(copied, contains('Players: You, Bot 1, Bot 2'));
+    // Numbered chronologically: draw (1) before pass (3).
+    final lines = copied!.split('\n');
+    expect(
+        lines.indexOf('3  You passes'),
+        greaterThan(lines.indexOf('1  You draws a Poison')));
+
+    await tester.tap(find.byTooltip('Share log'));
+    await tester.pumpAndSettle();
+    expect(shared, isNotNull);
+    expect(shared, contains('Toil & Troublez game log'));
+    expect(shared, contains('Seed 1'));
   });
 }
