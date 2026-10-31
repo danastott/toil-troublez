@@ -52,13 +52,18 @@ enum EventType {
 }
 
 class GameEvent {
-  GameEvent(this.type, {this.player, this.card, this.row, this.detail});
+  GameEvent(this.type,
+      {this.player, this.card, this.row, this.detail, this.other});
 
   final EventType type;
   final int? player; // player index
   final GameCard? card;
   final int? row;
   final String? detail;
+
+  /// A second player the event concerns (e.g. the Vanish holder when a
+  /// victim discards, or the source player of a Summon), or null.
+  final int? other;
 }
 
 class GameEngine {
@@ -67,6 +72,17 @@ class GameEngine {
         seed = seed,
         current = Random(seed + 77).nextInt(players.length) {
     assert(players.length >= 2 && players.length <= 6);
+    _cards = Deck.build(seed);
+    _byId = {for (final c in _cards) c.id: c};
+    drawPile = List.of(_cards);
+  }
+
+  /// Private: builds only the deck; [GameEngine.fromSave] fills in the
+  /// remaining state.
+  GameEngine._(List<Player> players, int seed)
+      : players = players,
+        seed = seed,
+        current = 0 {
     _cards = Deck.build(seed);
     _byId = {for (final c in _cards) c.id: c};
     drawPile = List.of(_cards);
@@ -455,7 +471,10 @@ class GameEngine {
       players[victim].trove.remove(matching.first);
       discardPile.add(matching.first);
       _emit(GameEvent(EventType.vanish,
-          player: victim, card: matching.first, detail: 'discards'));
+          player: victim,
+          card: matching.first,
+          other: v.holder,
+          detail: 'discards'));
       v.pos++;
       _advanceVictims(res);
     } else {
@@ -478,8 +497,11 @@ class GameEngine {
     if (card == null || !trove.any((c) => c.id == cardId) || card.talisman != v.type) return;
     trove.removeWhere((c) => c.id == cardId);
     discardPile.add(card);
-    _emit(GameEvent(EventType.vanish,
-        player: playerId, card: card, detail: 'discards'));
+      _emit(GameEvent(EventType.vanish,
+          player: playerId,
+          card: card,
+          other: res.holder,
+          detail: 'discards'));
     v.pos++;
     v.awaitingVictim = null;
     _advanceVictims(res);
@@ -505,7 +527,10 @@ class GameEngine {
     players[holder].trove.add(card);
     _sortTrove(holder);
     _emit(GameEvent(EventType.summon,
-        player: holder, card: card, detail: 'from ${players[fromPlayer].name}'));
+        player: holder,
+        card: card,
+        other: fromPlayer,
+        detail: 'from ${players[fromPlayer].name}'));
     _completeCollections(holder);
     res.summonTarget = false;
     _advanceResolution();
@@ -627,6 +652,113 @@ class GameEngine {
     }
     _emit(GameEvent(EventType.gameOver));
   }
+
+  // ---------------------------------------------------------------------
+  // Save / restore
+  // ---------------------------------------------------------------------
+
+  /// Serializes the complete engine state for mid-game saves. Card
+  /// references are stable ids; the deck is rebuilt from [seed] on
+  /// restore.
+  Map<String, Object?> toJson() => {
+        'v': 1,
+        'seed': seed,
+        'current': current,
+        'phase': phase.index,
+        'depletions': depletions,
+        'ending': _ending,
+        'pendingCard': pendingCard?.id,
+        'pendingOptions': [for (final o in pendingOptions) o.toSave()],
+        'pickupIdx': _pickupIdx,
+        'pendingPicks': [
+          for (final p in pendingPicks) [p.row, p.side.index],
+        ],
+        'winners': [...winners],
+        'drawPile': [for (final c in drawPile) c.id],
+        'discardPile': [for (final c in discardPile) c.id],
+        'forest': [
+          for (final row in forest.rows)
+            [for (final s in row) [s.card.id, s.cloak?.id]],
+        ],
+        'players': [
+          for (final p in players)
+            {
+              'name': p.name,
+              'bot': p.isBot,
+              'skill': p.skill?.index,
+              'trove': [for (final c in p.trove) c.id],
+              'collections': p.collections,
+            },
+        ],
+        'resolution': resolution?.toJson(),
+      };
+
+  /// Restores an engine from [toJson] output. The deck is deterministic
+  /// in [seed]; the save carries the draw-pile order, forest and troves.
+  factory GameEngine.fromSave(Map<String, Object?> j) {
+    final playersJson = j['players']! as List;
+    final players = [
+      for (var i = 0; i < playersJson.length; i++)
+        Player(
+          id: i,
+          name: (playersJson[i] as Map)['name'] as String,
+          isBot: (playersJson[i] as Map)['bot'] as bool,
+          skill: ((playersJson[i] as Map)['skill'] as int?) == null
+              ? null
+              : BotSkill.values[(playersJson[i] as Map)['skill'] as int],
+        ),
+    ];
+    final e = GameEngine._(players, j['seed'] as int);
+    final byId = e._byId;
+    e.current = j['current'] as int;
+    e.phase = Phase.values[j['phase'] as int];
+    e.depletions = j['depletions'] as int;
+    e._ending = j['ending'] as bool;
+    final pc = j['pendingCard'] as int?;
+    e.pendingCard = pc == null ? null : byId[pc];
+    e.pendingOptions = [
+      for (final m in (j['pendingOptions']! as List).cast<Map>())
+        PlacementOption.fromSave(m),
+    ];
+    e._pickupIdx = j['pickupIdx'] as int;
+    e.pendingPicks = [
+      for (final m in (j['pendingPicks']! as List).cast<List>())
+        PickOption(m[0] as int, PlaceSide.values[m[1] as int]),
+    ];
+    e.winners = List.of((j['winners']! as List).cast<int>());
+    e.drawPile = [
+      for (final id in (j['drawPile']! as List).cast<int>()) byId[id]!,
+    ];
+    e.discardPile.addAll([
+      for (final id in (j['discardPile']! as List).cast<int>()) byId[id]!,
+    ]);
+    e.forest.rows
+      ..clear()
+      ..addAll([
+        for (final row in (j['forest']! as List).cast<List>())
+          [
+            for (final m in row.cast<List>())
+              ForestSlot(
+                byId[m[0] as int]!,
+                m[1] == null ? null : byId[m[1] as int]!,
+              ),
+          ],
+      ]);
+    for (var i = 0; i < e.players.length; i++) {
+      final p = e.players[i];
+      p.trove
+        ..clear()
+        ..addAll([
+          for (final id in ((playersJson[i] as Map)['trove'] as List)
+              .cast<int>())
+            byId[id]!,
+        ]);
+      p.collections = (playersJson[i] as Map)['collections'] as int;
+    }
+    final r = j['resolution'] as Map?;
+    if (r != null) e.resolution = Resolution.fromSave(r, byId);
+    return e;
+  }
 }
 
 /// In-flight Master Magician action resolution.
@@ -661,6 +793,35 @@ class Resolution {
     if (summonTarget || poisonTarget) return holder;
     return null;
   }
+
+  Map<String, Object?> toJson() => {
+        'queue': [for (final c in queue) c.id],
+        'pickedCard': pickedCard?.id,
+        'row': row,
+        'holder': holder,
+        'mode': mode.index,
+        'vanish': vanish?.toJson(),
+        'summonTarget': summonTarget,
+        'poisonTarget': poisonTarget,
+      };
+
+  factory Resolution.fromSave(Map m, Map<int, GameCard> byId) =>
+      Resolution(
+        queue: [
+          for (final id in (m['queue'] as List).cast<int>()) byId[id]!,
+        ],
+        pickedCard: (m['pickedCard'] as int?) == null
+            ? null
+            : byId[m['pickedCard'] as int]!,
+        row: m['row'] as int,
+        holder: m['holder'] as int,
+        mode: ResolutionMode.values[m['mode'] as int],
+      )
+        ..vanish = (m['vanish'] as Map?) == null
+            ? null
+            : VanishState.fromSave(m['vanish'] as Map)
+        ..summonTarget = m['summonTarget'] as bool
+        ..poisonTarget = m['poisonTarget'] as bool;
 }
 
 enum ResolutionMode { rowCollect, pickup }
@@ -672,6 +833,24 @@ class VanishState {
   List<int> victims = [];
   int pos = 0;
   int? awaitingVictim;
+
+  Map<String, Object?> toJson() => {
+        'holder': holder,
+        'type': type?.index,
+        'victims': [...victims],
+        'pos': pos,
+        'awaitingVictim': awaitingVictim,
+      };
+
+  factory VanishState.fromSave(Map m) => VanishState(
+        holder: m['holder'] as int,
+      )
+        ..type = (m['type'] as int?) == null
+            ? null
+            : TalismanType.values[m['type'] as int]
+        ..victims = List.of((m['victims'] as List).cast<int>())
+        ..pos = m['pos'] as int
+        ..awaitingVictim = m['awaitingVictim'] as int?;
 }
 
 /// Bot decision-making skill levels.

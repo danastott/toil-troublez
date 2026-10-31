@@ -20,11 +20,14 @@ class TntApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Toil & Troublez',
-      debugShowCheckedModeBanner: false,
-      theme: TNTTheme.build(),
-      home: AppName(notifier: playerName, child: const HomeScreen()),
+    return AppName(
+      notifier: playerName,
+      child: MaterialApp(
+        title: 'Toil & Troublez',
+        debugShowCheckedModeBanner: false,
+        theme: TNTTheme.build(),
+        home: const HomeScreen(),
+      ),
     );
   }
 }

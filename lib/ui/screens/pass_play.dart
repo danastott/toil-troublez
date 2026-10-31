@@ -36,7 +36,11 @@ class _PassAndPlayScreenState extends State<PassAndPlayScreen> {
               : _names[i].text.trim(),
         ),
     ];
-    final session = LocalGameSession(players: players, mySeat: -1);
+    final session = LocalGameSession(
+      players: players,
+      mySeat: -1,
+      saveGame: true,
+    );
     session.start();
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(builder: (_) => GameScreen(session: session)),

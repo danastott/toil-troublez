@@ -16,25 +16,25 @@ class CardView extends StatelessWidget {
   const CardView({
     super.key,
     required this.card,
+    this.cloak,
     this.width = 88,
     this.glow = false,
-    this.cloaked = false,
   });
   final GameCard card;
   final double width;
 
+  /// When set, [card] is drawn covered by this Cloak card (face-up).
+  final GameCard? cloak;
+
   /// Draws a gilded selection rim and halo around the card.
   final bool glow;
-
-  /// Shows the hidden card back with a Cloak sigil instead of the face.
-  final bool cloaked;
 
   @override
   Widget build(BuildContext context) {
     final h = width / 0.72;
     final radius = width * 0.085;
-    final face = cloaked
-        ? _CloakFace(width: width)
+    final face = cloak != null
+        ? CloakCover(covered: card, cloak: cloak!, width: width)
         : _CardFace(card: card, width: width);
     return AnimatedScale(
       scale: glow ? 1.035 : 1.0,
@@ -195,7 +195,7 @@ class _CornerMark extends StatelessWidget {
         Text(
           '${card.number}',
           style: TextStyle(
-            fontFamily: TNTTheme.fontSerif,
+            fontFamily: TNTTheme.fontNumber,
             fontSize: w * 0.25,
             fontWeight: FontWeight.w900,
             height: 0.84,
@@ -287,46 +287,43 @@ class _NameBand extends StatelessWidget {
   }
 }
 
-/// A cloaked card: the raven back with a small Cloak badge.
-class _CloakFace extends StatelessWidget {
-  const _CloakFace({required this.width});
+/// A cloaked Talisman in the forest: the Cloak card face-up on top, with
+/// the covered card's face-up sliver peeking out beneath it. Its corner
+/// number stays visible (upside-down) under the Cloak, so the cover reads
+/// as a stack rather than a plain card back.
+class CloakCover extends StatelessWidget {
+  const CloakCover({
+    super.key,
+    required this.covered,
+    required this.cloak,
+    this.width = 88,
+  });
+
+  /// The hidden Talisman.
+  final GameCard covered;
+
+  /// The Cloak card sitting on top of it.
+  final GameCard cloak;
+
   final double width;
 
   @override
   Widget build(BuildContext context) {
     final w = width;
+    final h = w / 0.72;
     return SizedBox(
       width: w,
-      height: w / 0.72,
+      height: h,
       child: Stack(
         fit: StackFit.expand,
         children: [
-          CardBack(width: w),
-          Align(
-            alignment: Alignment.topRight,
-            child: Padding(
-              padding: EdgeInsets.all(w * 0.055),
-              child: Container(
-                width: w * 0.28,
-                height: w * 0.28,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: const Color(0xFF16242A).withValues(alpha: 0.88),
-                  border: Border.all(
-                    color: const Color(0xFFD9E2E4).withValues(alpha: 0.7),
-                    width: math.max(1, w * 0.012),
-                  ),
-                ),
-                child: Center(
-                  child: MagicianIcon(
-                    kind: MagicianKind.cloak,
-                    size: w * 0.19,
-                    color: const Color(0xFFD9E2E4),
-                  ),
-                ),
-              ),
-            ),
+          // The covered card, shifted down so its bottom edge and
+          // upside-down corner number peek out from under the Cloak.
+          Transform.translate(
+            offset: Offset(0, h * 0.14),
+            child: _CardFace(card: covered, width: w),
           ),
+          _CardFace(card: cloak, width: w),
         ],
       ),
     );
@@ -359,14 +356,6 @@ class CardBack extends StatelessWidget {
       ),
     );
   }
-}
-
-/// A cloaked card in the forest: the card back with a cloak badge.
-class CloakedCard extends StatelessWidget {
-  const CloakedCard({super.key, this.width = 88});
-  final double width;
-  @override
-  Widget build(BuildContext context) => _CloakFace(width: width);
 }
 
 // ---------------------------------------------------------------------------

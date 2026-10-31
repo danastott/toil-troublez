@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import '../game/bot.dart';
 import '../game/commands.dart';
 import '../game/engine.dart';
+import 'save.dart';
 
 /// A single device's view of one game, in any mode (solo, pass & play, host,
 /// join). The game screen depends only on this interface.
@@ -54,6 +55,7 @@ class LocalGameSession extends GameSession {
     this.mySeat = 0,
     this.botDelayMs = 700,
     this.seed,
+    this.saveGame = false,
   }) : _rngs = [
           for (var i = 0; i < players.length; i++)
             Random(players[i].name.hashCode * 31 + i * 7)
@@ -62,6 +64,35 @@ class LocalGameSession extends GameSession {
           players: List.of(players),
           seed: seed ?? Random().nextInt(1 << 30),
         );
+
+  LocalGameSession._({
+    required GameEngine engine,
+    this.mySeat = 0,
+    this.botDelayMs = 700,
+    this.seed,
+    this.saveGame = false,
+  })  : engine = engine,
+        _rngs = [
+          for (var i = 0; i < engine.players.length; i++)
+            Random(engine.players[i].name.hashCode * 31 + i * 7)
+        ];
+
+  /// Restores a previously saved game. The resumed session keeps saving.
+  factory LocalGameSession.fromSave(
+    GameSave save, {
+    int mySeat = 0,
+    int botDelayMs = 700,
+  }) {
+    final s = LocalGameSession._(
+      engine: GameEngine.fromSave(save.engineJson),
+      mySeat: mySeat,
+      botDelayMs: botDelayMs,
+      seed: save.engineJson['seed'] as int?,
+      saveGame: true,
+    );
+    s._resumed = true;
+    return s;
+  }
 
   @override
   final GameEngine engine;
@@ -72,12 +103,16 @@ class LocalGameSession extends GameSession {
 
   final int botDelayMs;
   final int? seed;
+  final bool saveGame;
   final List<Random> _rngs;
 
   Timer? _botTimer;
   String? _error;
   bool _disposed = false;
   bool _started = false;
+  bool _resumed = false;
+  DateTime _lastSaveAt = DateTime.fromMillisecondsSinceEpoch(0);
+  Future<void> _saveChain = Future.value();
   /// Invoked after every command applied on this device, with the seat it
   /// came from. The host lobby uses this to relay commands to clients.
   void Function(int by, GameCommand cmd)? onCommand;
@@ -116,6 +151,11 @@ class LocalGameSession extends GameSession {
   void start() {
     if (_started) return;
     _started = true;
+    // A fresh saved game replaces whatever was on disk; a resumed game
+    // keeps the file and overwrites it as play continues.
+    if (saveGame && !_resumed) {
+      _saveChain = _saveChain.then((_) => GameSave.clear());
+    }
     _notify();
   }
 
@@ -132,7 +172,22 @@ class LocalGameSession extends GameSession {
 
   void _notify() {
     notifyListeners();
+    if (saveGame) _queueSave();
     _driveBots();
+  }
+
+  void _queueSave() {
+    _saveChain = _saveChain.then((_) => _writeSave()).catchError((_) {});
+  }
+
+  Future<void> _writeSave({bool force = false}) async {
+    final now = DateTime.now();
+    if (!force &&
+        now.difference(_lastSaveAt) < const Duration(seconds: 60)) {
+      return;
+    }
+    _lastSaveAt = now;
+    await GameSave(engine.toJson(), mySeat, now).write();
   }
 
   void _driveBots() {
@@ -166,6 +221,17 @@ class LocalGameSession extends GameSession {
     if (_disposed) return;
     _disposed = true;
     _botTimer?.cancel();
+    if (saveGame) {
+      _saveChain = _saveChain.then((_) async {
+        // A finished game is not resumable: drop the save; otherwise
+        // write the latest state.
+        if (engine.over) {
+          await GameSave.clear();
+        } else {
+          await _writeSave(force: true);
+        }
+      });
+    }
     super.dispose();
   }
 }

@@ -171,14 +171,18 @@ class _HostScreenState extends State<HostScreen> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 if (_host.errorMessage != null)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
-                    child: Text(
-                      _host.errorMessage!,
-                      style: const TextStyle(
-                          fontFamily: TNTTheme.fontUi,
-                          fontSize: 13,
-                          color: Colors.redAccent),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 340),
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: Text(
+                        _host.errorMessage!,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                            fontFamily: TNTTheme.fontUi,
+                            fontSize: 13,
+                            color: Colors.redAccent),
+                      ),
                     ),
                   ),
                 if (lobby == null) ...[

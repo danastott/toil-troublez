@@ -18,9 +18,13 @@ class _SoloScreenState extends State<SoloScreen> {
   BotSkill _skill = BotSkill.skilled;
   int _bots = 2;
 
+  /// The name you will play as: the one saved on the home screen, or
+  /// 'Player' if none has been saved.
+  String get _myName =>
+      AppName.read(context).isEmpty ? 'Player' : AppName.read(context);
+
   List<Player> _players() {
-    final name = AppName.read(context);
-    final myName = name.isEmpty ? 'Player' : name;
+    final myName = _myName;
     final taken = <String>{myName};
     return [
       Player(id: 0, name: myName),
@@ -36,7 +40,11 @@ class _SoloScreenState extends State<SoloScreen> {
   }
 
   void _start() {
-    final session = LocalGameSession(players: _players(), mySeat: 0);
+    final session = LocalGameSession(
+      players: _players(),
+      mySeat: 0,
+      saveGame: true,
+    );
     session.start();
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(builder: (_) => GameScreen(session: session)),
@@ -59,6 +67,16 @@ class _SoloScreenState extends State<SoloScreen> {
                   style: const TextStyle(
                     fontFamily: TNTTheme.fontTitle,
                     fontSize: 19,
+                    color: TNTTheme.parchment,
+                  ),
+                ),
+                const SizedBox(height: 18),
+                Text(
+                  'You will play as $_myName.',
+                  style: const TextStyle(
+                    fontFamily: TNTTheme.fontSerif,
+                    fontStyle: FontStyle.italic,
+                    fontSize: 13,
                     color: TNTTheme.parchment,
                   ),
                 ),

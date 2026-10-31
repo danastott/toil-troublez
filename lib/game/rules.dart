@@ -68,6 +68,17 @@ class Forest {
 /// All placement choices for one drawn card.
 sealed class PlacementOption {
   const PlacementOption();
+
+  /// Encodes this option for [PlacementOption.fromSave].
+  Map<String, Object?> toSave();
+  /// Decodes one pending option from [toSave] output.
+  static PlacementOption fromSave(Map m) => switch (m['t']) {
+        'row' =>
+            RowPlacement(m['row'] as int, PlaceSide.values[m['side'] as int]),
+        'new' => const NewRowPlacement(),
+        'cloak' => CloakPlacement(m['targetId'] as int),
+        _ => throw FormatException('unknown placement option: ${m['t']}'),
+      };
 }
 
 /// Place into an existing row at one end.
@@ -81,6 +92,10 @@ class RowPlacement extends PlacementOption {
       other is RowPlacement && other.row == row && other.side == side;
   @override
   int get hashCode => Object.hash(row, side);
+
+  @override
+  Map<String, Object?> toSave() =>
+      {'t': 'row', 'row': row, 'side': side.index};
 }
 
 /// Place on a new row (only when fewer than three rows exist).
@@ -91,6 +106,9 @@ class NewRowPlacement extends PlacementOption {
   bool operator ==(Object other) => other is NewRowPlacement;
   @override
   int get hashCode => runtimeType.hashCode;
+
+  @override
+  Map<String, Object?> toSave() => {'t': 'new'};
 }
 
 /// Cover a Talisman with the Cloak.
@@ -103,6 +121,9 @@ class CloakPlacement extends PlacementOption {
       other is CloakPlacement && other.targetId == targetId;
   @override
   int get hashCode => targetId.hashCode;
+
+  @override
+  Map<String, Object?> toSave() => {'t': 'cloak', 'targetId': targetId};
 }
 
 /// Placement rules for the Enchanted Forest.

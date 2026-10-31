@@ -72,22 +72,44 @@ class HostLobby extends LobbyController {
   @override
   GameSession? get table => _session;
 
-  /// Opens the WebSocket port and starts advertising the lobby.
+  /// Opens the WebSocket port and starts advertising the lobby. If the
+  /// requested port is taken, it scans up through a nine-port window —
+  /// whichever port wins is the one advertised to joiners, so a fallback
+  /// port works as well as the default.
   Future<void> start() async {
     _seats.add(
         const LobbySeat(id: 'host', name: 'Host', isHost: true));
     _seats.first = _seats.first.copyWith(name: _hostName);
     var tryPort = _initialPort;
+    var firstPort = tryPort;
     HttpServer? server;
-    for (var attempt = 0; attempt < 5 && server == null; attempt++) {
-      try {
-        server = await HttpServer.bind(InternetAddress.anyIPv4, tryPort);
-      } catch (_) {
-        tryPort++;
+    Object? bindError;
+    for (var attempt = 0; attempt < 9 && server == null; attempt++) {
+      // IPv4 first, then the IPv6 wildcard (dual-stack on macOS): on
+      // IPv6-only networks the IPv4 bind alone would fail even when a
+      // free port exists.
+      for (final addr in [
+        InternetAddress.anyIPv4,
+        InternetAddress.anyIPv6,
+      ]) {
+        try {
+          server = await HttpServer.bind(addr, tryPort);
+          break;
+        } catch (e) {
+          bindError ??= e;
+        }
       }
+      tryPort++;
     }
     if (server == null) {
-      _error = 'Could not open the game port.';
+      final reason = bindError is SocketException &&
+              bindError.osError?.message != null
+          ? ' (${bindError.osError!.message})'
+          : '';
+      _error = 'Could not open the game port: ports $firstPort to '
+          '${firstPort + 8} are busy or blocked$reason. Another program '
+          '(often another run of this app) is probably holding them — '
+          'close it and try again.';
       notifyListeners();
       return;
     }

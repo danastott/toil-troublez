@@ -68,6 +68,8 @@ class TNTTheme {
   static const String fontTitle = 'Cinzel Decorative';
   static const String fontSerif = 'Fraunces';
   static const String fontUi = 'Nunito Sans';
+  /// Geometric sans for card numbers: 3 and 5 stay clearly distinct.
+  static const String fontNumber = 'Outfit';
 
   static ThemeData build() {
     final scheme = ColorScheme.fromSeed(

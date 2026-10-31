@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 
 import '../../game/cards.dart';
+import '../../session/local_session.dart';
+import '../../session/save.dart';
 import '../app_state.dart';
 import '../icons.dart';
 import '../theme.dart';
+import 'game.dart';
 import 'host.dart';
 import 'join.dart';
 import 'pass_play.dart';
@@ -20,11 +23,74 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   TextEditingController? _name;
   ValueNotifier<String>? _nameNotifier;
+  GameSave? _save;
+  DateTime? _lastSeenMtime;
+  bool _checking = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshSave();
+  }
 
   @override
   void dispose() {
     _name?.dispose();
     super.dispose();
+  }
+
+  /// Re-reads the save file (on startup and whenever [mtime] changed).
+  void _refreshSave() {
+    GameSave.load().then((s) async {
+      if (!mounted) return;
+      setState(() => _save = s);
+      _lastSeenMtime = s == null ? null : await GameSave.mtime();
+    });
+  }
+
+  /// Home sits at the bottom of the stack, so a pop back to it re-runs
+  /// [build]: diff the save file's mtime to catch games that ended since
+  /// the last load.
+  void _checkSaveChanged() {
+    if (_checking) return;
+    _checking = true;
+    GameSave.mtime().then((mt) {
+      _checking = false;
+      if (!mounted) return;
+      if (mt == null
+          ? _save != null
+          : (_save == null || mt != _lastSeenMtime)) {
+        _refreshSave();
+      }
+    });
+  }
+
+  void _continue() {
+    final save = _save;
+    if (save == null) return;
+    final session = LocalGameSession.fromSave(save, mySeat: save.mySeat);
+    session.start();
+    _go(GameScreen(session: session));
+  }
+
+  void _forget() {
+    GameSave.clear();
+    setState(() => _save = null);
+  }
+
+  String _saveSubtitle() {
+    final names = (_save!.engineJson['players']! as List)
+        .map((p) => (p as Map)['name'] as String)
+        .join(' · ');
+    final d = DateTime.now().difference(_save!.savedAt);
+    final when = d.inMinutes < 1
+        ? 'just now'
+        : d.inMinutes < 60
+            ? '${d.inMinutes} min ago'
+            : d.inHours < 24
+                ? '${d.inHours} h ago'
+                : '${d.inDays} d ago';
+    return '$names — saved $when';
   }
 
   void _go(Widget screen) =>
@@ -33,6 +99,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     _nameNotifier ??= AppName.of(context);
+    _checkSaveChanged();
     _name ??= TextEditingController(text: _nameNotifier!.value);
     return TntScaffold(
       body: SafeArea(
@@ -102,6 +169,26 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
                 const SizedBox(height: 14),
+                if (_save != null) ...[
+                  MenuTile(
+                    icon: Icons.play_circle_outline,
+                    title: 'Continue Last Game',
+                    subtitle: _saveSubtitle(),
+                    onTap: _continue,
+                  ),
+                  TextButton(
+                    onPressed: _forget,
+                    child: Text(
+                      'Forget it',
+                      style: TextStyle(
+                        fontFamily: TNTTheme.fontUi,
+                        fontSize: 12.5,
+                        color: TNTTheme.goldSoft.withValues(alpha: 0.7),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                ],
                 MenuTile(
                   icon: Icons.person,
                   title: 'Single Player',

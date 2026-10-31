@@ -36,6 +36,24 @@ class _GameScreenState extends State<GameScreen> {
   /// Engine events already processed by [_scanEvents].
   int _lastEventCount = 0;
 
+  // Fly-to-destination animations for Vanish / Summon: the moved card
+  // ghosts from its last seen spot and flies to its new home while the
+  // real tree updates underneath.
+  final Map<int, GlobalKey> _cardKeys = {};
+  final Map<int, GlobalKey> _troveBoxKeys = {};
+  final GlobalKey _deckKey = GlobalKey();
+  final GlobalKey _overlayKey = GlobalKey();
+  final Map<int, Offset> _cardCenters = {};
+  final Map<int, Offset> _troveCenters = {};
+  Offset? _deckCenter;
+  final Set<int> _flyingCards = {};
+  final List<_Flight> _flights = [];
+
+  GlobalKey _keyForCard(int id) => _cardKeys.putIfAbsent(id, () => GlobalKey());
+
+  GlobalKey _keyForTrove(int player) =>
+      _troveBoxKeys.putIfAbsent(player, () => GlobalKey());
+
   /// My most recently busted card, shown in the hand with a stamp until
   /// the timer expires.
   GameCard? _bustCard;
@@ -68,6 +86,9 @@ class _GameScreenState extends State<GameScreen> {
       return;
     }
     for (final ev in events.sublist(_lastEventCount, n)) {
+      if (ev.type == EventType.vanish || ev.type == EventType.summon) {
+        _spawnFlight(ev);
+      }
       final mine =
           widget.session.isPassAndPlay || ev.player == widget.session.mySeat;
       if (!mine) continue;
@@ -83,6 +104,58 @@ class _GameScreenState extends State<GameScreen> {
       }
     }
     _lastEventCount = n;
+  }
+
+  /// Makes a moved card (Vanish discard, Summon theft) fly from its last
+  /// seen spot to its new home instead of teleporting.
+  void _spawnFlight(GameEvent ev) {
+    final card = ev.card;
+    // Detail-less vanish/summon events only announce the action; the
+    // card actually moves with a detail ('discards' / 'from ...').
+    if (card == null || ev.detail == null || _flyingCards.contains(card.id)) {
+      return;
+    }
+    final from = _cardCenters[card.id];
+    final to = ev.type == EventType.summon
+        ? _troveCenters[ev.player]
+        : _deckCenter;
+    if (from == null || to == null) return;
+    _flyingCards.add(card.id);
+    _flights.add(_Flight(card: card, from: from, to: to));
+    Timer(const Duration(milliseconds: 600), () {
+      if (!mounted) return;
+      setState(() {
+        _flyingCards.remove(card.id);
+        _flights.removeWhere((f) => f.card.id == card.id);
+      });
+    });
+  }
+
+  /// Records each rendered trove card's and each trove box's center,
+  /// relative to the flight overlay, so a flight can start exactly where
+  /// the card currently sits.
+  void _captureCenters() {
+    if (!mounted) return;
+    final root =
+        _overlayKey.currentContext?.findRenderObject() as RenderBox?;
+    if (root == null || !root.attached) return;
+    final origin = root.localToGlobal(Offset.zero);
+    void note(GlobalKey key, void Function(Offset) set) {
+      final box = key.currentContext?.findRenderObject() as RenderBox?;
+      if (box == null || !box.attached) return;
+      set(box.localToGlobal(box.size.center(Offset.zero)) - origin);
+    }
+
+    _cardCenters.clear();
+    _troveCenters.clear();
+    for (final e in _cardKeys.entries) {
+      note(e.value, (o) => _cardCenters[e.key] = o);
+    }
+    for (final e in _troveBoxKeys.entries) {
+      note(e.value, (o) => _troveCenters[e.key] = o);
+    }
+    _deckCenter = null;
+    note(_deckKey, (o) => _deckCenter = o);
   }
 
   @override
@@ -397,6 +470,7 @@ class _GameScreenState extends State<GameScreen> {
       behavior: HitTestBehavior.opaque,
       onTap: active ? _sendDraw : null,
       child: SizedBox(
+        key: _deckKey,
         width: 84,
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -571,6 +645,7 @@ class _GameScreenState extends State<GameScreen> {
     final active = _e.acting == player && !_e.over;
     final cards = p.trove;
     return Container(
+      key: _keyForTrove(player),
       margin: const EdgeInsets.symmetric(horizontal: 3, vertical: 2),
       padding: const EdgeInsets.all(4),
       decoration: BoxDecoration(
@@ -621,36 +696,64 @@ class _GameScreenState extends State<GameScreen> {
                 ),
               ),
             ),
-          // Cards wrap onto extra rows when the trove outgrows one line,
-          // instead of scrolling sideways.
-          Wrap(
-            spacing: 0,
-            runSpacing: 0,
-            children: [
-              if (cards.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 8),
-                  child: Text(
-                    'empty',
-                    style: TextStyle(
-                      fontFamily: TNTTheme.fontSerif,
-                      fontStyle: FontStyle.italic,
-                      fontSize: 10,
-                      color: Colors.white38,
-                    ),
-                  ),
-                ),
-              for (final c in cards)
-                _CardTile(
-                  card: c,
-                  width: 37,
-                  glow: _troveTapTarget(c, player),
-                  onTap: _troveTapTarget(c, player)
-                      ? () => _troveTap(c, player)
+          // The trove is a bottom-aligned card stack, like a fan of deck
+          // cards: the latest card on top, the rest peeking beneath.
+          Align(
+            alignment: Alignment.bottomCenter,
+            child: _troveStack(cards, player),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// A deck-style vertical stack: each card offsets a little lower, the
+  /// top (last) card fully visible. Spreading compresses once the stack
+  /// grows past eight cards.
+  Widget _troveStack(List<GameCard> cards, int player) {
+    const w = 37.0;
+    final h = w / 0.72;
+    final steps = cards.length - 1;
+    final step = steps <= 0 ? 0.0 : h * 0.42 * (steps > 7 ? 7.0 / steps : 1.0);
+    if (cards.isEmpty) {
+      return const SizedBox(
+        width: 37,
+        child: Padding(
+          padding: EdgeInsets.symmetric(vertical: 8),
+          child: Text(
+            'empty',
+            style: TextStyle(
+              fontFamily: TNTTheme.fontSerif,
+              fontStyle: FontStyle.italic,
+              fontSize: 10,
+              color: Colors.white38,
+            ),
+          ),
+        ),
+      );
+    }
+    return SizedBox(
+      width: w,
+      height: h + steps * step,
+      child: Stack(
+        children: [
+          for (var i = 0; i < cards.length; i++)
+            Positioned(
+              top: (cards.length - 1 - i) * step,
+              left: 0,
+              child: Opacity(
+                opacity: _flyingCards.contains(cards[i].id) ? 0 : 1,
+                child: _CardTile(
+                  key: _keyForCard(cards[i].id),
+                  card: cards[i],
+                  width: w,
+                  glow: _troveTapTarget(cards[i], player),
+                  onTap: _troveTapTarget(cards[i], player)
+                      ? () => _troveTap(cards[i], player)
                       : null,
                 ),
-            ],
-          ),
+              ),
+            ),
         ],
       ),
     );
@@ -675,6 +778,7 @@ class _GameScreenState extends State<GameScreen> {
       key: const ValueKey('tnt-troves'),
       constraints: const BoxConstraints(minHeight: 76),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
         children: [for (final p in _e.players) Expanded(child: _trove(p.id))],
       ),
     );
@@ -1166,6 +1270,7 @@ class _GameScreenState extends State<GameScreen> {
   @override
   Widget build(BuildContext context) {
     final err = widget.session.errorMessage;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _captureCenters());
     return TntScaffold(
       appBar: AppBar(
         title: const Text('Toil & Troublez'),
@@ -1221,6 +1326,35 @@ class _GameScreenState extends State<GameScreen> {
             if (_bustCard != null) _bustBanner(),
             if (_e.over) _results(),
             if (_showPassVeil) _passVeil(),
+            Positioned.fill(
+              child: IgnorePointer(
+                key: _overlayKey,
+                child: Stack(
+                  children: [
+                    for (final f in _flights)
+                      TweenAnimationBuilder<Offset>(
+                        key: ValueKey('fly${f.card.id}'),
+                        tween: Tween<Offset>(begin: f.from, end: f.to),
+                        duration: const Duration(milliseconds: 520),
+                        curve: Curves.easeInOut,
+                        builder: (context, value, _) {
+                          final d = (f.from - f.to).distance;
+                          final t = d == 0 ? 1.0 : (f.from - value).distance / d;
+                          final fade = t > 0.75 ? (1 - t) / 0.25 : 1.0;
+                          return Positioned(
+                            left: value.dx - 18.5,
+                            top: value.dy - 25.7,
+                            child: Opacity(
+                              opacity: fade,
+                              child: CardView(card: f.card, width: 37),
+                            ),
+                          );
+                        },
+                      ),
+                  ],
+                ),
+              ),
+            ),
           ],
         ),
       ),
@@ -1254,9 +1388,9 @@ class _CardTile extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 2),
       child: CardView(
         card: card,
+        cloak: cloak,
         width: width,
         glow: glow,
-        cloaked: cloak != null,
       ),
     );
     if (onTap == null) return tile;
@@ -1352,7 +1486,7 @@ class _DeckTop extends StatelessWidget {
                 '$count',
                 textAlign: TextAlign.center,
                 style: const TextStyle(
-                  fontFamily: TNTTheme.fontTitle,
+                  fontFamily: TNTTheme.fontNumber,
                   fontSize: 10,
                   fontWeight: FontWeight.w700,
                   color: TNTTheme.ink,
@@ -1543,4 +1677,14 @@ class _DashedBorderPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _DashedBorderPainter old) =>
       old.color != color || old.width != width || old.radius != radius;
+}
+
+/// One in-flight card (Vanish discard / Summon theft) and its endpoints,
+/// in flight-overlay coordinates.
+class _Flight {
+  const _Flight({required this.card, required this.from, required this.to});
+
+  final GameCard card;
+  final Offset from;
+  final Offset to;
 }
