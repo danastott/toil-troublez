@@ -278,4 +278,36 @@ void main() {
     }
     expect(session.engine.over || session.engine.acting != 0, isTrue);
   });
+
+  testWidgets('a trove that outgrows one line wraps onto extra rows',
+      (tester) async {
+    final session = solo(1);
+    // Stuff ten real cards into my trove — far more than one line of
+    // 37px tiles holds — and pull them out of the draw pile by id.
+    final stolen = Deck.build(7).take(10).toList();
+    final ids = stolen.map((c) => c.id).toSet();
+    session.engine.drawPile
+        .removeWhere((c) => ids.contains(c.id));
+    session.engine.players[0].trove.addAll(stolen);
+    await pumpGame(tester, session);
+
+    final troves = find.byKey(const ValueKey('tnt-troves'));
+    expect(troves, findsOneWidget);
+    // The trove area grows past its minimum height...
+    expect(tester.getSize(troves).height, greaterThan(76));
+    // ...because the cards wrap: ten tiles do not fit one line, so the
+    // vertical spread of the cards exceeds a single card's height (a
+    // sideways scroll would keep them on one line).
+    final rects = find
+        .descendant(of: troves, matching: find.byType(CardView))
+        .evaluate()
+        .map((e) => tester.getRect(find.byWidget(e.widget)))
+        .toList();
+    expect(rects, hasLength(10));
+    final top =
+        rects.map((r) => r.top).reduce((a, b) => a < b ? a : b);
+    final bottom =
+        rects.map((r) => r.bottom).reduce((a, b) => a > b ? a : b);
+    expect(bottom - top, greaterThan(rects.first.height));
+  });
 }
