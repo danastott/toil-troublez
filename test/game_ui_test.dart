@@ -1,5 +1,6 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:toil_troublez/ui/icons.dart';
@@ -32,16 +33,24 @@ GameSession solo(int seed) {
   return s;
 }
 
-Future<void> pumpGame(WidgetTester tester, GameSession session) async {
+Future<void> pumpGame(
+  WidgetTester tester,
+  GameSession session, {
+  double textScale = 1.0,
+}) async {
   // Portrait phone viewport: the whole forest (rows + new-row zone) is
   // visible without scrolling.
   tester.view.physicalSize = const Size(1170, 2532);
   tester.view.devicePixelRatio = 3.0;
   addTearDown(tester.view.reset);
+  if (textScale != 1.0) {
+    tester.binding.platformDispatcher.textScaleFactorTestValue = textScale;
+    addTearDown(tester.binding.platformDispatcher.clearTextScaleFactorTestValue);
+  }
   await tester.pumpWidget(
     MaterialApp(
       theme: TNTTheme.build(),
-      home: GameScreen(session: session, ownsSession: true),
+      home: GameScreen(session: session, ownsSession: true, revealPauseMs: 0),
     ),
   );
   await tester.pumpAndSettle();
@@ -110,10 +119,32 @@ void main() {
     expect(find.text('End Turn'), findsOneWidget);
   });
 
+  testWidgets('a drawn card flies from the deck into the face-up hand',
+      (tester) async {
+    final session = solo(1);
+    await pumpGame(tester, session);
+
+    await tester.tap(find.byKey(const ValueKey('tnt-deck')));
+    await tester.pump();
+
+    // A draw animation is running from the deck's top card to the hand.
+    final card = session.engine.pendingCard;
+    expect(card, isNotNull);
+    final flight = find.byKey(ValueKey('draw-${card!.id}'));
+    expect(flight, findsOneWidget);
+
+    // It lands face-up in the hand and the overlay clears.
+    await tester.pumpAndSettle();
+    expect(flight, findsNothing);
+    expect(handCard(), findsOneWidget);
+  });
+
   testWidgets('a card that cannot be played busts: stamp and banner',
       (tester) async {
+    // Pump under a large device text scale: the stamp must stay on one
+    // line even when the system scales text up.
     final session = solo(40);
-    await pumpGame(tester, session);
+    await pumpGame(tester, session, textScale: 1.3);
 
     await tester.tap(find.byKey(const ValueKey('tnt-deck')));
     await tester.pump(); // Apply the draw.
@@ -124,6 +155,16 @@ void main() {
     expect(handCard(), findsOneWidget);
     expect(find.text('BUST'), findsOneWidget);
     expect(find.textContaining('Busted!'), findsOneWidget);
+    // The stamp (padding 7 per side) fits the 78px card on one line,
+    // even under the enlarged text scale.
+    final stamp = tester.renderObject<RenderParagraph>(find.text('BUST'));
+    final painter = TextPainter(
+      text: stamp.text,
+      textDirection: TextDirection.ltr,
+      textScaler: stamp.textScaler,
+    );
+    painter.layout(maxWidth: 78.0 - 14.0);
+    expect(painter.computeLineMetrics().length, 1);
 
     // After a moment the stamp lifts and the hand empties out.
     await tester.pump(const Duration(milliseconds: 2700));
@@ -138,6 +179,31 @@ void main() {
                     (ev.type == EventType.cloak &&
                         ev.detail == 'discarded'))),
         isTrue);
+  });
+
+  testWidgets('tapping a tree target flies the hand card into the forest',
+      (tester) async {
+    final session = solo(1);
+    await pumpGame(tester, session);
+
+    await tester.tap(find.byKey(const ValueKey('tnt-deck')));
+    await tester.pumpAndSettle();
+    final card = session.engine.pendingCard!;
+
+    // Tapping the glowing new-row outline plays the card there, and it
+    // flies from the hand instead of teleporting.
+    await tester.tap(find.byKey(const ValueKey('tnt-newrow-0')));
+    await tester.pump();
+    // The flight is promoted in the post-frame capture, which opens one
+    // more frame for the overlay to build into.
+    await tester.pump();
+
+    final flight = find.byKey(ValueKey('fly${card.id}'));
+    expect(flight, findsOneWidget);
+    expect(session.engine.forest.rows.length, 1);
+
+    await tester.pumpAndSettle();
+    expect(flight, findsNothing);
   });
 
   testWidgets('a second draw can be dropped onto an existing row end',
@@ -171,6 +237,11 @@ void main() {
     await g.moveTo(to);
     await tester.pump(const Duration(milliseconds: 150));
     await g.up();
+    // A drag already moved the card on screen: no fly-in follows.
+    await tester.pump();
+    await tester.pump();
+    final placed = session.engine.forest.rows[0].first.card;
+    expect(find.byKey(ValueKey('fly${placed.id}')), findsNothing);
     await tester.pumpAndSettle();
 
     // The Summon landed at the left end of row 0; my turn continues.
@@ -180,6 +251,44 @@ void main() {
     expect(row0.last.card.talisman, TalismanType.flower);
     expect(session.engine.phase, Phase.continuing);
     expect(find.byKey(const ValueKey('tnt-hand-empty')), findsOneWidget);
+  });
+
+  testWidgets('tapping a row-end drop slot flies the hand card in',
+      (tester) async {
+    final session = solo(353);
+    await pumpGame(tester, session);
+
+    // First draw: a Flower goes into a new row.
+    await tester.tap(find.byKey(const ValueKey('tnt-deck')));
+    await tester.pumpAndSettle();
+    final from = tester.getCenter(handCard());
+    final to = tester.getCenter(find.byKey(const ValueKey('tnt-newrow-0')));
+    final g = await tester.startGesture(from);
+    await g.moveTo(to);
+    await tester.pump(const Duration(milliseconds: 150));
+    await g.up();
+    await tester.pumpAndSettle();
+    expect(session.engine.phase, Phase.continuing);
+
+    // Push my luck: a Summon flips into the hand and both ends of row 0
+    // show dashed drop slots.
+    await tester.tap(find.byKey(const ValueKey('tnt-deck')));
+    await tester.pumpAndSettle();
+    final card = session.engine.pendingCard!;
+    expect(find.byKey(const ValueKey('tnt-drop-0L')), findsOneWidget);
+
+    // Tapping the dashed slot plays the card there — and, like a tap on
+    // any other tree target, the card flies in from the hand instead of
+    // popping into place.
+    await tester.tap(find.byKey(const ValueKey('tnt-drop-0L')));
+    await tester.pump();
+    await tester.pump(); // Post-frame capture promotes the flight.
+    final flight = find.byKey(ValueKey('fly${card.id}'));
+    expect(flight, findsOneWidget);
+
+    await tester.pumpAndSettle();
+    expect(flight, findsNothing);
+    expect(session.engine.forest.rows[0].length, 2);
   });
 
   testWidgets('a drawn Cloak covers a glowing talisman with a tap',

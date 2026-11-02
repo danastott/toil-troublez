@@ -166,7 +166,7 @@ void main() {
       await tester.pumpWidget(
         MaterialApp(
           theme: TNTTheme.build(),
-          home: GameScreen(session: s, ownsSession: true),
+          home: GameScreen(session: s, ownsSession: true, revealPauseMs: 0),
         ),
       );
       await tester.pumpAndSettle();

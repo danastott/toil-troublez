@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'name_prefs.dart';
+import 'settings_prefs.dart';
 import 'ui/app_state.dart';
 import 'ui/screens/home.dart';
 import 'ui/theme.dart';
@@ -10,6 +11,8 @@ Future<void> main() async {
   TntApp.playerName.value = await loadSavedName();
   TntApp.playerName.addListener(
       () => saveName(TntApp.playerName.value));
+  revealPauseMs.value = await loadRevealPauseMs();
+  revealPauseMs.addListener(() => saveRevealPauseMs(revealPauseMs.value));
   runApp(const TntApp());
 }
 

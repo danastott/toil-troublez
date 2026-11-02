@@ -11,20 +11,39 @@ import '../../game/commands.dart';
 import '../../game/engine.dart';
 import '../../game/rules.dart';
 import '../../session/local_session.dart';
+import '../../settings_prefs.dart' as settings;
 import '../app_state.dart';
 import '../card_view.dart';
 import '../icons.dart';
 import '../theme.dart';
+
+/// How long a card takes to flip over: out of the deck into the hand, or in
+/// place when a card appears without a draw animation.
+const Duration _flipDuration = Duration(milliseconds: 520);
+
+/// Flight time; identical to the flip, so a drawn card's deck-to-hand
+/// flight lands exactly as the face-up flip underneath it completes.
+const Duration _flightDuration = _flipDuration;
+
+/// The real tile stays hidden (and its ghost alive) this long after a
+/// flight starts — 80ms past the 520ms of [_flightDuration] — so the card
+/// appears exactly where the ghost lands.
+const int _flightCleanupMs = 600;
 
 class GameScreen extends StatefulWidget {
   const GameScreen({
     super.key,
     required this.session,
     this.ownsSession = false,
+    this.revealPauseMs,
   });
 
   final GameSession session;
   final bool ownsSession;
+
+  /// Overrides the reveal-pause setting for this screen (tests pass zero so
+  /// bot moves stay instant). Null uses the app-wide setting.
+  final int? revealPauseMs;
 
   @override
   State<GameScreen> createState() => _GameScreenState();
@@ -45,12 +64,34 @@ class _GameScreenState extends State<GameScreen> {
   final Map<int, GlobalKey> _cardKeys = {};
   final Map<int, GlobalKey> _troveBoxKeys = {};
   final GlobalKey _deckKey = GlobalKey();
+  final GlobalKey _deckTopKey = GlobalKey();
   final GlobalKey _overlayKey = GlobalKey();
   final Map<int, Offset> _cardCenters = {};
   final Map<int, Offset> _troveCenters = {};
   Offset? _deckCenter;
   final Set<int> _flyingCards = {};
   final List<_Flight> _flights = [];
+
+  // Place-into-forest animations. A placement is recorded the moment the
+  // engine event fires and becomes a real flight on the next frame capture,
+  // once the destination tile's position is known. For a bot the flight is
+  // held for the reveal pause first (see [_heldCard]) so the other players
+  // can see the played card.
+  final List<_PlaceIntent> _placeIntents = [];
+  final GlobalKey _handKey = GlobalKey();
+  Offset? _handCenter;
+  Offset? _deckTopCenter;
+  GameCard? _heldCard;
+
+  /// The card currently flipping from the deck into the hand, if any. The
+  /// hand card underneath stays hidden until this lands.
+  _DrawReveal? _drawReveal;
+  Timer? _drawTimer;
+
+  /// Set by an actual drag-and-drop accept so the resulting placement does
+  /// not also spawn a fly-in (the drag already moved the card on screen).
+  /// Tapping a drop target never sets it — the card still flies in.
+  bool _justDropped = false;
 
   GlobalKey _keyForCard(int id) => _cardKeys.putIfAbsent(id, () => GlobalKey());
 
@@ -61,6 +102,15 @@ class _GameScreenState extends State<GameScreen> {
   /// the timer expires.
   GameCard? _bustCard;
   Timer? _bustTimer;
+
+  /// Every animation timer in flight, cancelled together on dispose so a
+  /// torn-down screen leaves no pending timers.
+  final Set<Timer> _timers = {};
+
+  Timer _addTimer(Timer t) {
+    _timers.add(t);
+    return t;
+  }
 
   @override
   void initState() {
@@ -89,8 +139,16 @@ class _GameScreenState extends State<GameScreen> {
       return;
     }
     for (final ev in events.sublist(_lastEventCount, n)) {
+      if (ev.type == EventType.draw) _justDropped = false;
+      if (ev.type == EventType.draw && ev.card != null) {
+        _startDrawReveal(ev.card!);
+      }
       if (ev.type == EventType.vanish || ev.type == EventType.summon) {
         _spawnFlight(ev);
+      }
+      if (ev.type == EventType.place ||
+          (ev.type == EventType.cloak && ev.detail == null)) {
+        _onPlaceEvent(ev);
       }
       final mine =
           widget.session.isPassAndPlay || ev.player == widget.session.mySeat;
@@ -101,12 +159,35 @@ class _GameScreenState extends State<GameScreen> {
       if (busted && ev.card != null) {
         _bustCard = ev.card;
         _bustTimer?.cancel();
-        _bustTimer = Timer(const Duration(milliseconds: 2600), () {
+        _bustTimer = _addTimer(Timer(const Duration(milliseconds: 2600), () {
           if (mounted) setState(() => _bustCard = null);
-        });
+        }));
       }
     }
     _lastEventCount = n;
+  }
+
+  /// Flies a freshly drawn card from the deck to its face-up spot in the
+  /// hand, flipping it on the way. The hand's own flip runs underneath,
+  /// hidden, so the two land together.
+  void _startDrawReveal(GameCard card) {
+    // While a bust banner owns the hand, later bot draws stay hidden.
+    if (_bustCard != null) return;
+    final from = _deckTopCenter ?? _deckCenter;
+    final to = _handCenter;
+    if (from == null || to == null) return;
+    _drawTimer?.cancel();
+    _drawReveal = _DrawReveal(card: card, from: from, to: to);
+    _drawTimer = _addTimer(Timer(_flipDuration, () {
+      if (!mounted) return;
+      setState(() => _drawReveal = null);
+    }));
+  }
+
+  /// Ends a draw reveal early: the card is being played before it lands.
+  void _finishDrawReveal() {
+    _drawTimer?.cancel();
+    _drawReveal = null;
   }
 
   /// Makes a moved card (Vanish discard, Summon theft) fly from its last
@@ -125,7 +206,7 @@ class _GameScreenState extends State<GameScreen> {
     if (from == null || to == null) return;
     _flyingCards.add(card.id);
     _flights.add(_Flight(card: card, from: from, to: to));
-    Timer(const Duration(milliseconds: 600), () {
+    Timer(const Duration(milliseconds: _flightCleanupMs), () {
       if (!mounted) return;
       setState(() {
         _flyingCards.remove(card.id);
@@ -159,11 +240,117 @@ class _GameScreenState extends State<GameScreen> {
     }
     _deckCenter = null;
     note(_deckKey, (o) => _deckCenter = o);
+    _deckTopCenter = null;
+    note(_deckTopKey, (o) => _deckTopCenter = o);
+    _handCenter = null;
+    note(_handKey, (o) => _handCenter = o);
+    _promotePlaces();
   }
+
+  /// Turns a card placement (a row placement, or a Cloak laid on a
+  /// Talisman) into a fly-in from the hand. A drag-and-drop is skipped —
+  /// the drag already moved the card on screen. For a bot the flight is
+  /// held for the reveal pause (see [_heldCard]) so the other players can
+  /// see the played card before it lands.
+  void _onPlaceEvent(GameEvent ev) {
+    final card = ev.card;
+    if (card == null) {
+      _justDropped = false;
+      return;
+    }
+    final justDropped = _justDropped;
+    _justDropped = false;
+    if (_drawReveal?.card.id == card.id) _finishDrawReveal();
+    if (justDropped) return;
+    final actor = _e.players[ev.player!];
+    final delayMs = actor.isBot
+        ? widget.revealPauseMs ?? settings.revealPauseMs.value
+        : 0;
+    // The tile to hide while the ghost flies in: the placed card's new tile
+    // for a row placement, or the Talisman's tile for a Cloak laid on it.
+    final suppressId =
+        ev.type == EventType.cloak ? _cloakedTargetId(card) : card.id;
+    if (suppressId == null || _flyingCards.contains(suppressId)) return;
+    _flyingCards.add(suppressId);
+    _placeIntents.add(
+      _PlaceIntent(
+        ghost: card,
+        from: _handCenter,
+        suppressId: suppressId,
+        delayMs: delayMs,
+      ),
+    );
+    if (delayMs > 0) _heldCard = card;
+  }
+
+  /// The id of the Talisman a given Cloak card is resting on, or null.
+  int? _cloakedTargetId(GameCard cloak) {
+    for (final row in _e.forest.rows) {
+      for (final slot in row) {
+        if (slot.cloak?.id == cloak.id) return slot.card.id;
+      }
+    }
+    return null;
+  }
+
+  /// Realizes any pending placement intents now that the destination
+  /// tiles' positions are captured: the ghost starts flying (after any bot
+  /// hold) while the real tile stays hidden until it lands.
+  void _promotePlaces() {
+    if (_placeIntents.isEmpty) return;
+    final pending = <_PlaceIntent>[];
+    for (final p in _placeIntents) {
+      final to = _cardCenters[p.suppressId];
+      if (to == null) {
+        pending.add(p);
+        continue;
+      }
+      final ghost = _Flight(card: p.ghost, from: p.from ?? to, to: to);
+      if (p.delayMs > 0) {
+        // Hold: the played card stays in the hand (see [_heldCard]) until
+        // the ghost takes off, so other players can see what the bot played.
+        _addTimer(
+          Timer(Duration(milliseconds: p.delayMs), () {
+            if (!mounted) return;
+            setState(() {
+              _heldCard = null;
+              _flights.add(ghost);
+            });
+          }),
+        );
+      } else {
+        // A human placed by tapping: the destination tile only gained its
+        // position this frame, so open a fresh frame to show the flight.
+        setState(() => _flights.add(ghost));
+      }
+      _addTimer(
+        Timer(Duration(milliseconds: p.delayMs + _flightCleanupMs), () {
+          if (!mounted) return;
+          setState(() {
+            _flyingCards.remove(p.suppressId);
+            _flights.removeWhere((f) => f.card.id == p.ghost.id);
+          });
+        }),
+      );
+    }
+    _placeIntents
+      ..clear()
+      ..addAll(pending);
+  }
+
+  /// Hides [tile] (for a flight in progress) while keeping it laid out so
+  /// the layout — and the captured tile position — are undisturbed. Always
+  /// wraps in the same Opacity so toggling it does not remount the child
+  /// (which would restart its flip animation).
+  Widget _hide(Widget tile, bool hidden) =>
+      Opacity(opacity: hidden ? 0.0 : 1.0, child: tile);
 
   @override
   void dispose() {
     _bustTimer?.cancel();
+    for (final t in _timers) {
+      t.cancel();
+    }
     widget.session.removeListener(_onSession);
     if (widget.ownsSession) widget.session.dispose();
     super.dispose();
@@ -231,7 +418,8 @@ class _GameScreenState extends State<GameScreen> {
         placing &&
         _e.pendingCard?.isCloak == true &&
         _cloakTargets.contains(slot.card.id);
-    final tile = _CardTile(
+    final hidden = _flyingCards.contains(slot.card.id);
+    Widget tile = _CardTile(
       key: ValueKey('tnt-tile-${slot.card.id}'),
       card: slot.card,
       cloak: slot.cloak,
@@ -249,19 +437,30 @@ class _GameScreenState extends State<GameScreen> {
           ? () => _send(PlaceCmd(CloakPlacement(slot.card.id)))
           : null,
     );
-    if (!cloakTap) return tile;
+    // Keyed wrapper so the flight overlay can find the tile's center.
+    tile = SizedBox(key: _keyForCard(slot.card.id), child: tile);
+    if (!cloakTap) return _hide(tile, hidden);
     // A Cloak in hand can also be dragged onto a glowing Talisman.
-    return DragTarget<int>(
-      onWillAcceptWithDetails: (_) => true,
-      onAcceptWithDetails: (_) => _send(PlaceCmd(CloakPlacement(slot.card.id))),
-      builder: (context, candidate, _) => _CardTile(
-        key: ValueKey('tnt-tile-${slot.card.id}'),
-        card: slot.card,
-        cloak: slot.cloak,
-        width: width,
-        glow: cloakTap || candidate.isNotEmpty,
-        onTap: () => _send(PlaceCmd(CloakPlacement(slot.card.id))),
+    return _hide(
+      SizedBox(
+        key: _keyForCard(slot.card.id),
+        child: DragTarget<int>(
+          onWillAcceptWithDetails: (_) => true,
+          onAcceptWithDetails: (_) {
+            _justDropped = true;
+            _send(PlaceCmd(CloakPlacement(slot.card.id)));
+          },
+          builder: (context, candidate, _) => _CardTile(
+            key: ValueKey('tnt-tile-${slot.card.id}'),
+            card: slot.card,
+            cloak: slot.cloak,
+            width: width,
+            glow: cloakTap || candidate.isNotEmpty,
+            onTap: () => _send(PlaceCmd(CloakPlacement(slot.card.id))),
+          ),
+        ),
       ),
+      hidden,
     );
   }
 
@@ -324,7 +523,11 @@ class _GameScreenState extends State<GameScreen> {
                       if (leftDrop != null)
                         _DropSlot(
                           key: ValueKey('tnt-drop-${rowIndex}L'),
-                          onAccept: () => _send(PlaceCmd(leftDrop!)),
+                          onTap: () => _send(PlaceCmd(leftDrop!)),
+                          onDrop: () {
+                            _justDropped = true;
+                            _send(PlaceCmd(leftDrop!));
+                          },
                         ),
                       for (var i = 0; i < n; i++)
                         _rowTile(
@@ -337,7 +540,11 @@ class _GameScreenState extends State<GameScreen> {
                       if (rightDrop != null)
                         _DropSlot(
                           key: ValueKey('tnt-drop-${rowIndex}R'),
-                          onAccept: () => _send(PlaceCmd(rightDrop!)),
+                          onTap: () => _send(PlaceCmd(rightDrop!)),
+                          onDrop: () {
+                            _justDropped = true;
+                            _send(PlaceCmd(rightDrop!));
+                          },
                         ),
                     ],
                   );
@@ -379,7 +586,10 @@ class _GameScreenState extends State<GameScreen> {
       onTap: accept,
       child: DragTarget<int>(
         onWillAcceptWithDetails: (_) => true,
-        onAcceptWithDetails: (_) => accept(),
+        onAcceptWithDetails: (_) {
+          _justDropped = true;
+          accept();
+        },
         builder: (context, candidate, _) {
           final hot = candidate.isNotEmpty;
           return Center(
@@ -436,13 +646,20 @@ class _GameScreenState extends State<GameScreen> {
   /// in the middle, and the face-down deck on the right.
   Widget _handBar() {
     final e = _e;
-    GameCard? card;
+    // The acting player's drawn card in the hand; a bot's played card is
+    // held on screen briefly (see _heldCard) so the others can see it.
+    GameCard? card = _heldCard;
     var busted = false;
-    if (e.phase == Phase.placing && _canAct) card = e.pendingCard;
     if (card == null && _bustCard != null) {
       card = _bustCard;
       busted = true;
     }
+    // A bot's drawn card is public too: show it while it decides where to
+    // play. The deck-to-hand flip hides it until the animation lands.
+    if (card == null && e.phase == Phase.placing) card = e.pendingCard;
+    // While any draw flight is in, hide the hand too, so the incoming
+    // ghost doesn't land on top of a bot's held card.
+    final drawing = card != null && _drawReveal != null;
     return Container(
       key: const ValueKey('tnt-hand'),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
@@ -453,7 +670,13 @@ class _GameScreenState extends State<GameScreen> {
           const SizedBox(width: 10),
           Expanded(
             child: Center(
-              child: card != null ? _hand(card, busted: busted) : _handEmpty(),
+              child: SizedBox(
+                key: _handKey,
+                child: _hide(
+                  card != null ? _hand(card, busted: busted) : _handEmpty(),
+                  drawing,
+                ),
+              ),
             ),
           ),
           const SizedBox(width: 12),
@@ -489,7 +712,11 @@ class _GameScreenState extends State<GameScreen> {
                   if (count >= 2)
                     Positioned(left: 3, top: 3.5, child: CardBack(width: w)),
                   Positioned(
-                    child: _DeckTop(count: count, active: active),
+                    child: _DeckTop(
+                      key: _deckTopKey,
+                      count: count,
+                      active: active,
+                    ),
                   ),
                 ],
               ),
@@ -520,26 +747,31 @@ class _GameScreenState extends State<GameScreen> {
   Widget _hand(GameCard card, {required bool busted}) {
     final canDrag = !busted && _e.phase == Phase.placing && _canAct;
     final core = _FlipReveal(card: card, width: 78, busted: busted);
-    if (!canDrag) return core;
-    return Draggable<int>(
-      data: card.id,
-      feedback: Container(
-        margin: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(10),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.45),
-              blurRadius: 18,
-              offset: const Offset(0, 10),
-            ),
-          ],
+    Widget child = core;
+    if (canDrag) {
+      child = Draggable<int>(
+        data: card.id,
+        feedback: Container(
+          margin: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(10),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.45),
+                blurRadius: 18,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: CardView(card: card, width: 84),
         ),
-        child: CardView(card: card, width: 84),
-      ),
-      childWhenDragging: _handEmpty(),
-      child: core,
-    );
+        childWhenDragging: _handEmpty(),
+        child: core,
+      );
+    }
+    // Flights launch from _handCenter (the whole hand area), so the card
+    // itself needs no key.
+    return child;
   }
 
   Widget _handEmpty() {
@@ -1419,7 +1651,7 @@ class _GameScreenState extends State<GameScreen> {
                       TweenAnimationBuilder<Offset>(
                         key: ValueKey('fly${f.card.id}'),
                         tween: Tween<Offset>(begin: f.from, end: f.to),
-                        duration: const Duration(milliseconds: 520),
+                        duration: _flightDuration,
                         curve: Curves.easeInOut,
                         builder: (context, value, _) {
                           final d = (f.from - f.to).distance;
@@ -1434,6 +1666,11 @@ class _GameScreenState extends State<GameScreen> {
                             ),
                           );
                         },
+                      ),
+                    if (_drawReveal != null)
+                      _DrawFlight(
+                        key: ValueKey('draw-${_drawReveal!.card.id}'),
+                        reveal: _drawReveal!,
                       ),
                   ],
                 ),
@@ -1532,7 +1769,7 @@ class _GoldButton extends StatelessWidget {
 // ----------------------------------------------------------------------
 
 class _DeckTop extends StatelessWidget {
-  const _DeckTop({required this.count, required this.active});
+  const _DeckTop({super.key, required this.count, required this.active});
 
   final int count;
   final bool active;
@@ -1618,7 +1855,7 @@ class _FlipRevealState extends State<_FlipReveal> {
     return TweenAnimationBuilder<double>(
       key: ValueKey('flip-${widget.card.id}'),
       tween: Tween(begin: 0.0, end: 1.0),
-      duration: const Duration(milliseconds: 520),
+      duration: _flipDuration,
       curve: Curves.easeInOut,
       builder: (context, t, _) {
         Widget card = CardBack(width: w);
@@ -1652,11 +1889,12 @@ class _FlipRevealState extends State<_FlipReveal> {
                             ),
                             child: const Text(
                               'BUST',
+                              textScaler: TextScaler.noScaling,
                               style: TextStyle(
                                 fontFamily: TNTTheme.fontTitle,
-                                fontSize: 16,
+                                fontSize: 14,
                                 fontWeight: FontWeight.w900,
-                                letterSpacing: 3,
+                                letterSpacing: 2,
                                 color: Colors.white,
                               ),
                             ),
@@ -1681,22 +1919,28 @@ class _FlipRevealState extends State<_FlipReveal> {
 // ----------------------------------------------------------------------
 
 class _DropSlot extends StatelessWidget {
-  const _DropSlot({super.key, required this.onAccept});
+  const _DropSlot({super.key, required this.onTap, required this.onDrop});
 
-  final VoidCallback onAccept;
+  /// A plain tap: the card has not moved on screen, so the hand-to-tree
+  /// fly-in still plays.
+  final VoidCallback onTap;
+
+  /// A drag-and-drop accept: the drag already moved the card on screen, so
+  /// the caller suppresses the fly-in.
+  final VoidCallback onDrop;
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: onAccept,
+      onTap: onTap,
       child: SizedBox(
         width: 44,
         height: 60,
         child: DragTarget<int>(
           onWillAcceptWithDetails: (_) => true,
           onAcceptWithDetails: (_) {
-            onAccept();
+            onDrop();
           },
           builder: (context, candidate, _) {
             final hot = candidate.isNotEmpty;
@@ -1771,14 +2015,82 @@ class _DashedBorderPainter extends CustomPainter {
       old.color != color || old.width != width || old.radius != radius;
 }
 
-/// One in-flight card (Vanish discard / Summon theft) and its endpoints,
-/// in flight-overlay coordinates.
+/// One in-flight card (Vanish discard / Summon theft / a held bot placement)
+/// and its endpoints, in flight-overlay coordinates.
 class _Flight {
   const _Flight({required this.card, required this.from, required this.to});
 
   final GameCard card;
   final Offset from;
   final Offset to;
+}
+
+/// A freshly drawn card flipping from the deck into its face-up spot in the
+/// hand, in flight-overlay coordinates.
+class _DrawReveal {
+  const _DrawReveal({required this.card, required this.from, required this.to});
+
+  final GameCard card;
+  final Offset from;
+  final Offset to;
+}
+
+/// Draws the deck-to-hand flip for a [_DrawReveal]. The card travels while
+/// it turns over, so it leaves the deck face-down and lands face-up.
+class _DrawFlight extends StatelessWidget {
+  const _DrawFlight({super.key, required this.reveal});
+
+  final _DrawReveal reveal;
+
+  /// The card grows from the deck's top card to the hand's size as it flies.
+  static const double _deckWidth = 54;
+  static const double _handWidth = 78;
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0.0, end: 1.0),
+      duration: _flipDuration,
+      curve: Curves.easeInOut,
+      builder: (context, t, _) {
+        final pos = Offset.lerp(reveal.from, reveal.to, t)!;
+        final width = _deckWidth + (_handWidth - _deckWidth) * t;
+        final faceUp = t >= 0.5;
+        final s = faceUp ? (t - 0.5) * 2 : (0.5 - t) * 2;
+        final card = faceUp
+            ? CardView(card: reveal.card, width: width)
+            : CardBack(width: width);
+        return Positioned(
+          left: pos.dx - width / 2,
+          top: pos.dy - (width / 0.72) / 2,
+          child: Transform.scale(scaleX: math.max(s, 0.02), child: card),
+        );
+      },
+    );
+  }
+}
+
+/// A recorded card placement waiting to become a real flight once the
+/// destination tile's position is captured. For a bot the ghost is held
+/// for [delayMs] before it flies, so the played card stays in the hand.
+class _PlaceIntent {
+  _PlaceIntent({
+    required this.ghost,
+    required this.from,
+    required this.suppressId,
+    required this.delayMs,
+  });
+
+  /// The card shown by the flying ghost (the played card).
+  final GameCard ghost;
+
+  /// Where the flight starts (the hand card's position), or null.
+  final Offset? from;
+
+  /// The tile to hide while the ghost flies in (the placed card's tile, or
+  /// the Talisman's tile for a Cloak).
+  final int suppressId;
+  final int delayMs;
 }
 
 // ----------------------------------------------------------------------

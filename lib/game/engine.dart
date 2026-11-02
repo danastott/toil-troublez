@@ -67,10 +67,8 @@ class GameEvent {
 }
 
 class GameEngine {
-  GameEngine({required List<Player> players, required int seed})
-      : players = players,
-        seed = seed,
-        current = Random(seed + 77).nextInt(players.length) {
+  GameEngine({required this.players, required this.seed})
+      : current = Random(seed + 77).nextInt(players.length) {
     assert(players.length >= 2 && players.length <= 6);
     _cards = Deck.build(seed);
     _byId = {for (final c in _cards) c.id: c};
@@ -79,10 +77,7 @@ class GameEngine {
 
   /// Private: builds only the deck; [GameEngine.fromSave] fills in the
   /// remaining state.
-  GameEngine._(List<Player> players, int seed)
-      : players = players,
-        seed = seed,
-        current = 0 {
+  GameEngine._(this.players, this.seed) : current = 0 {
     _cards = Deck.build(seed);
     _byId = {for (final c in _cards) c.id: c};
     drawPile = List.of(_cards);

@@ -28,7 +28,7 @@ class _JoinScreenState extends State<JoinScreen> {
   void initState() {
     super.initState();
     _scan = TableDiscovery();
-    _scan.found.listen((_) => setState(() {}));
+    _scan.changed.listen((_) => setState(() {}));
     unawaited(_scan.start());
   }
 

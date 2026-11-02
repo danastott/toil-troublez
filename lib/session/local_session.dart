@@ -30,6 +30,10 @@ abstract class GameSession extends ChangeNotifier {
   /// client is not.
   bool get isAuthority;
 
+  /// How long a bot "thinks" before a move, in milliseconds. Local sessions
+  /// drive their bots on this delay. Zero for networked sessions (no bots).
+  int get botDelayMs => 0;
+
   /// The last rejected command, if any.
   String? get errorMessage;
 
@@ -101,6 +105,7 @@ class LocalGameSession extends GameSession {
   @override
   final int mySeat;
 
+  @override
   final int botDelayMs;
   final int? seed;
   final bool saveGame;

@@ -1,7 +1,7 @@
 name: toil_troublez
 description: "A digital adaptation of the push-your-luck card game Toil & Troublez."
 publish_to: 'none'
-version: 1.0.67+68
+version: 1.0.11+12
 
 environment:
   sdk: ^3.13.7

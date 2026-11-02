@@ -20,16 +20,22 @@ class _Client {
 /// WebSocket (dart:io, like the cover_your_assets reference), and
 /// advertises itself on the LAN via UDP discovery.
 class HostLobby extends LobbyController {
-  HostLobby({required String hostName, int port = Net.wsPort})
-      : _hostName = Net.clampName(hostName),
+  HostLobby({
+    required String hostName,
+    int port = Net.wsPort,
+    int discoveryPort = Net.discoveryPort,
+  })  : _hostName = Net.clampName(hostName),
         _initialPort = port,
-        _port = port;
+        _port = port,
+        // ignore: prefer_initializing_formals
+        _discoveryPort = discoveryPort;
 
   final String _hostName;
   final List<LobbySeat> _seats = [];
   final List<_Client> _clients = [];
   final int _initialPort;
   int _port;
+  final int _discoveryPort;
   int _nextId = 1;
   HttpServer? _server;
   DiscoveryResponder? _discovery;
@@ -126,6 +132,7 @@ class HostLobby extends LobbyController {
       hostName: _hostName,
       port: _port,
       seatsProvider: () => List.of(_seats),
+      discoveryPort: _discoveryPort,
     );
     await _discovery!.start();
     notifyListeners();
